@@ -243,6 +243,11 @@ static kernel_sigset_t init_sigmask;
 
 #ifdef DEBUG
 static bool removed_sig_handler;
+/* Threads with a delayed signal in a shared fragment: it must stay unlinked until the last
+ * of them has exited, or a relink strands the others in any loop in it (PR 596069).
+ * Protected by change_linking_lock.
+ */
+DECLARE_NEVERPROT_VAR(static thread_sig_info_t *interrupted_shared_threads, NULL);
 #endif
 
 os_cxt_ptr_t osc_empty;
@@ -1400,6 +1405,8 @@ signal_fork_init(dcontext_t *dcontext)
     /* Child of fork is a single thread in a new process so should
      * start over w/ no sharing (xref i#190/PR 452178)
      */
+    interrupted_shared_threads = NULL;
+    info->interrupted_next = NULL;
     if (info->sighand->is_shared) {
         info->sighand->is_shared = false;
         info->sighand->refcount = 0;
@@ -1507,6 +1514,15 @@ signal_thread_exit(dcontext_t *dcontext, bool other_thread)
     /* i#1012: DR's signal handler should always be installed before this point.
      */
     ASSERT(sigsegv_handler_is_ours() || removed_sig_handler);
+
+    /* The list must not point at our freed info.  The fragment may stay unlinked,
+     * which only costs cache exits.
+     */
+    if (info->interrupted != NULL && TEST(FRAG_SHARED, info->interrupted->flags)) {
+        acquire_recursive_lock(&change_linking_lock);
+        interrupted_shared_remove(info, info->interrupted);
+        release_recursive_lock(&change_linking_lock);
+    }
 
     while (info->num_unstarted_children > 0) {
         /* must wait for children to start and copy our state
@@ -4428,30 +4444,46 @@ abort_on_DR_fault(dcontext_t *dcontext, app_pc pc, byte *target, int sig,
     ASSERT_NOT_REACHED();
 }
 
+/* Caller must hold change_linking_lock.  Removes info from interrupted_shared_threads and
+ * returns whether another thread there still needs shared fragment f unlinked.
+ */
+static bool
+interrupted_shared_remove(thread_sig_info_t *info, fragment_t *f)
+{
+    bool others = false;
+    thread_sig_info_t **p = &interrupted_shared_threads;
+    while (*p != NULL) {
+        if (*p == info) {
+            *p = info->interrupted_next;
+            continue;
+        }
+        if ((*p)->interrupted == f)
+            others = true;
+        p = &(*p)->interrupted_next;
+    }
+    info->interrupted_next = NULL;
+    return others;
+}
+
 /* Returns whether unlinked or mangled syscall.
  * Restored in receive_pending_signal.
  */
 static bool
 unlink_fragment_for_signal(dcontext_t *dcontext, fragment_t *f,
-                           byte *pc /*interruption pc*/)
+                           byte *pc /*interruption pc*/, thread_sig_info_t *waiter)
 {
     /* We only come here if we interrupted a fragment in the cache,
      * or interrupted transition gencode (i#2019),
      * which means that this thread's DR state is safe, and so it
      * should be ok to acquire a lock.  xref PR 596069.
      *
-     * There is a race where if two threads hit a signal in the same
-     * shared fragment, the first could re-link after the second
-     * un-links but before the second exits, and the second could then
-     * execute the syscall, resulting in arbitrary delay prior to
-     * signal delivery.  We don't want to allocate global memory,
-     * but we could use a static array of counters (since should
-     * be small # of interrupted shared fragments at any one time)
-     * used as refcounts so we only unlink when all are done.
-     * Not bothering to implement now: going to live w/ chance of
-     * long signal delays.  xref PR 596069.
+     * If waiter is non-NULL and f is shared, the thread joins
+     * interrupted_shared_threads even if f was already unlinked, so f stays
+     * unlinked until it exits.  Syscall mangling below is not tracked per thread:
+     * another thread's restore can still let this one execute the syscall.
      */
     bool changed = false;
+    bool track = waiter != NULL && TEST(FRAG_SHARED, f->flags);
     bool waslinking = is_couldbelinking(dcontext);
     if (!waslinking)
         enter_couldbelinking(dcontext, NULL, false);
@@ -4462,18 +4494,28 @@ unlink_fragment_for_signal(dcontext_t *dcontext, fragment_t *f,
          * where we don't yet support translation (since can't fault)
          * we end up w/ no bound on delivery...
          */
-    } else if (TEST(FRAG_LINKED_OUTGOING, f->flags)) {
-        LOG(THREAD, LOG_ASYNCH, 3, "\tunlinking outgoing for interrupted F%d\n", f->id);
+    } else if (track || TEST(FRAG_LINKED_OUTGOING, f->flags)) {
         SHARED_FLAGS_RECURSIVE_LOCK(f->flags, acquire, change_linking_lock);
         /* Double-check flags to ensure some other thread didn't unlink
          * while we waited for the change_linking_lock.
          */
         if (TEST(FRAG_LINKED_OUTGOING, f->flags)) {
+            LOG(THREAD, LOG_ASYNCH, 3, "\tunlinking outgoing for interrupted F%d\n",
+                f->id);
             unlink_fragment_outgoing(dcontext, f);
             changed = true;
             /* i#4670: Fragments that use the special ibl xfer trampoline are unlinked
              * automatically if pending signals count is greater than zero.
              */
+        } else {
+            LOG(THREAD, LOG_ASYNCH, 3, "\toutgoing already unlinked for interrupted F%d\n",
+                f->id);
+        }
+        if (track) {
+            waiter->interrupted = f;
+            waiter->interrupted_pc = NULL; /* Set by the caller if we changed f. */
+            waiter->interrupted_next = interrupted_shared_threads;
+            interrupted_shared_threads = waiter;
         }
         SHARED_FLAGS_RECURSIVE_LOCK(f->flags, release, change_linking_lock);
     } else {
@@ -4500,18 +4542,24 @@ unlink_fragment_for_signal(dcontext_t *dcontext, fragment_t *f,
 static void
 relink_interrupted_fragment(dcontext_t *dcontext, thread_sig_info_t *info)
 {
+    bool shared;
     if (info->interrupted == NULL)
         return;
+    shared = TEST(FRAG_SHARED, info->interrupted->flags);
     /* i#2066: if we were building a trace, it may already be re-linked */
-    if (!TEST(FRAG_LINKED_OUTGOING, info->interrupted->flags)) {
-        LOG(THREAD, LOG_ASYNCH, 3, "\tre-linking outgoing for interrupted F%d\n",
-            info->interrupted->id);
+    if (shared || !TEST(FRAG_LINKED_OUTGOING, info->interrupted->flags)) {
+        bool others;
         SHARED_FLAGS_RECURSIVE_LOCK(info->interrupted->flags, acquire,
                                     change_linking_lock);
+        others = shared && interrupted_shared_remove(info, info->interrupted);
         /* Double-check flags to ensure some other thread didn't link
          * while we waited for the change_linking_lock.
+         * Do not resurrect a fragment a flush has unlinked for deletion.
          */
-        if (!TEST(FRAG_LINKED_OUTGOING, info->interrupted->flags)) {
+        if (!others && !TEST(FRAG_LINKED_OUTGOING, info->interrupted->flags) &&
+            !TEST(FRAG_WAS_DELETED, info->interrupted->flags)) {
+            LOG(THREAD, LOG_ASYNCH, 3, "\tre-linking outgoing for interrupted F%d\n",
+                info->interrupted->id);
             link_fragment_outgoing(dcontext, info->interrupted, false);
         }
         SHARED_FLAGS_RECURSIVE_LOCK(info->interrupted->flags, release,
@@ -4986,7 +5034,7 @@ record_pending_signal(dcontext_t *dcontext, int sig, kernel_ucontext_t *ucxt,
                     if (info->interrupted != f) {
                         /* Just in case there's a prior, avoid leaving it unlinked. */
                         relink_interrupted_fragment(dcontext, info);
-                        if (unlink_fragment_for_signal(dcontext, f, pc)) {
+                        if (unlink_fragment_for_signal(dcontext, f, pc, info)) {
                             info->interrupted = f;
                             info->interrupted_pc = pc;
                         } else {
@@ -5062,7 +5110,7 @@ record_pending_signal(dcontext_t *dcontext, int sig, kernel_ucontext_t *ucxt,
         if (info->interrupted == NULL && !get_at_syscall(dcontext)) {
             f = find_next_fragment_from_gencode(dcontext, sc);
             if (f != NULL && !TEST(FRAG_COARSE_GRAIN, f->flags)) {
-                if (unlink_fragment_for_signal(dcontext, f, FCACHE_ENTRY_PC(f))) {
+                if (unlink_fragment_for_signal(dcontext, f, FCACHE_ENTRY_PC(f), info)) {
                     info->interrupted = f;
                     info->interrupted_pc = FCACHE_ENTRY_PC(f);
                 }
@@ -8921,7 +8969,7 @@ handle_nudge_signal(dcontext_t *dcontext, kernel_siginfo_t *siginfo,
         fragment_t wrapper;
         fragment_t *f = fragment_pclookup(dcontext, (byte *)sc->SC_XIP, &wrapper);
         if (f != NULL) {
-            if (unlink_fragment_for_signal(dcontext, f, (byte *)sc->SC_XIP))
+            if (unlink_fragment_for_signal(dcontext, f, (byte *)sc->SC_XIP, NULL))
                 dcontext->interrupted_for_nudge = f;
         }
     }

@@ -520,6 +520,7 @@ typedef struct _thread_sig_info_t {
     void *sigheap;           /* special heap */
     fragment_t *interrupted; /* frag we unlinked for delaying signal */
     cache_pc interrupted_pc; /* pc within frag we unlinked for delaying signal */
+    struct _thread_sig_info_t *interrupted_next; /* see interrupted_shared_threads */
 
 #if defined(X86) && defined(LINUX)
     /* As the xstate buffer varies dynamically and gets large (with avx512
