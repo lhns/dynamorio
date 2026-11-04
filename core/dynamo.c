@@ -2262,6 +2262,9 @@ dynamo_thread_init(byte *dstack_in, priv_mcontext_t *mc, void *os_data,
     if (dynamo_initialized && !bb_lock_start)
         pre_second_thread();
 
+#ifdef UNIX
+    bool dropped_uninit_count = false;
+#endif
     /* synch point so thread creation can be prevented for critical periods */
     d_r_mutex_lock(&thread_initexit_lock);
 
@@ -2274,9 +2277,16 @@ dynamo_thread_init(byte *dstack_in, priv_mcontext_t *mc, void *os_data,
      * clean up, initializing this thread then would be dangerous, better to
      * wait here for the app to die.
      */
-    /* under current implementation of process exit, can happen only under
-     * debug build, or app_start app_exit interface */
+    /* This happens at process exit when a clone races with it.  The exit synch waits for
+     * uninit_thread_count, so we must drop out of it or neither thread can proceed.
+     */
     while (dynamo_exited) {
+#ifdef UNIX
+        if (dstack_in != NULL && !dropped_uninit_count) {
+            dropped_uninit_count = true;
+            ATOMIC_DEC(int, uninit_thread_count);
+        }
+#endif
         /* logging should be safe, though might not actually result in log
          * message */
         DODEBUG_ONCE(LOG(GLOBAL, LOG_THREADS, 1,
@@ -2332,7 +2342,7 @@ dynamo_thread_init(byte *dstack_in, priv_mcontext_t *mc, void *os_data,
     add_thread(IF_WINDOWS_ELSE(NT_CURRENT_THREAD, get_process_id()), d_r_get_thread_id(),
                under_dynamo_control, dcontext);
 #ifdef UNIX /* i#2600: Not easy on Windows: we rely on init_apc_go_native there. */
-    if (dstack_in != NULL) { /* Else not a thread creation we observed */
+    if (dstack_in != NULL && !dropped_uninit_count) { /* Else not one we observed. */
         ASSERT(uninit_thread_count > 0);
         ATOMIC_DEC(int, uninit_thread_count);
     }
