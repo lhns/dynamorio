@@ -241,13 +241,16 @@ typedef struct _clone_record_t {
 static thread_sig_info_t init_info;
 static kernel_sigset_t init_sigmask;
 
-#ifdef DEBUG
-static bool removed_sig_handler;
 /* Threads with a delayed signal in a shared fragment: it must stay unlinked until the last
  * of them has exited, or a relink strands the others in any loop in it (PR 596069).
  * Protected by change_linking_lock.
  */
 DECLARE_NEVERPROT_VAR(static thread_sig_info_t *interrupted_shared_threads, NULL);
+static bool
+interrupted_shared_remove(thread_sig_info_t *info, fragment_t *f);
+
+#ifdef DEBUG
+static bool removed_sig_handler;
 #endif
 
 os_cxt_ptr_t osc_empty;
