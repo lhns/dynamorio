@@ -5207,8 +5207,8 @@ const instr_info_t prefix_extensions[][12] = {
   }, { /* prefix extension 138 */
     {OP_movbe,   0x38f018, catUncategorized, "movbe", Gv, xx, Mv, xx, xx, mrm, x, tpe[139][0]},
     {INVALID,  0xf338f018, catUncategorized, "(bad)",   xx, xx, xx, xx, xx, no, x, NA},
-    /* really this is regular data-size prefix */
-    {OP_movbe, 0x6638f018, catUncategorized, "movbe", Gw, xx, Mw, xx, xx, mrm, x, tpe[139][2]},
+    /* Regular data-size prefix: not listed, so it stays for Gv, and rex.w trumps it. */
+    {OP_movbe,   0x38f018, catUncategorized, "movbe", Gv, xx, Mv, xx, xx, mrm, x, tpe[139][2]},
     {OP_crc32, 0xf238f018, catUncategorized, "crc32", Gy, xx, Eb, Gy, xx, mrm, x, END_LIST},
     {INVALID,    0x38f018, catUncategorized, "(bad)",   xx, xx, xx, xx, xx, no, x, NA},
     {INVALID,  0xf338f018, catUncategorized, "(bad)",   xx, xx, xx, xx, xx, no, x, NA},
@@ -5221,8 +5221,8 @@ const instr_info_t prefix_extensions[][12] = {
   }, { /* prefix extension 139 */
     {OP_movbe,   0x38f118, catUncategorized, "movbe", Mv, xx, Gv, xx, xx, mrm, x, tpe[138][2]},
     {INVALID,  0xf338f118, catUncategorized, "(bad)",   xx, xx, xx, xx, xx, no, x, NA},
-    /* really this is regular data-size prefix */
-    {OP_movbe, 0x6638f118, catUncategorized, "movbe", Mw, xx, Gw, xx, xx, mrm, x, END_LIST},
+    /* Regular data-size prefix: not listed, so it stays for Mv, and rex.w trumps it. */
+    {OP_movbe,   0x38f118, catUncategorized, "movbe", Mv, xx, Gv, xx, xx, mrm, x, END_LIST},
     /* The Intel table separates out a data-size prefix into Ey and Ew: ours are combined,
      * and thus we want Ev.
      */
