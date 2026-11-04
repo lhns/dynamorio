@@ -7158,31 +7158,16 @@ mangle_trace(dcontext_t *dcontext, instrlist_t *ilist, monitor_data_t *md)
  * UTILITIES
  */
 
-/* Converts instr_t EFLAGS_ flags to corresponding fragment_t FRAG_ flags,
- * assuming that the instr_t flags correspond to the start of the fragment_t.
- * Assumes instr_eflags has already accounted for predication.
+/* Converts instr_t EFLAGS_ flags to corresponding fragment_t FRAG_ flags.
+ * Always none, so that every caller treats the flags as live: an instruction that is the
+ * first to "write" a flag does not make the flag dead on entry. A shift by 0 or a rep cmps/scas
+ * with rcx 0 leaves it unchanged, a fault before the write hands it to the app's handler, and
+ * rewritten code may no longer write it at all.
  */
 uint
 instr_eflags_to_fragment_eflags(uint instr_eflags)
 {
-    uint frag_eflags = 0;
-#ifdef X86
-    if (instr_eflags == EFLAGS_WRITE_OF) {
-        /* this fragment writes OF before reading it
-         * May still read other flags before writing them.
-         */
-        frag_eflags |= FRAG_WRITES_EFLAGS_OF;
-        return frag_eflags;
-    }
-#endif
-    if (instr_eflags == EFLAGS_WRITE_ARITH) {
-        /* fragment writes all 6 prior to reading */
-        frag_eflags |= FRAG_WRITES_EFLAGS_ARITH;
-#ifdef X86
-        frag_eflags |= FRAG_WRITES_EFLAGS_OF;
-#endif
-    }
-    return frag_eflags;
+    return 0;
 }
 
 /* Returns one of these flags, defined in instr.h:
