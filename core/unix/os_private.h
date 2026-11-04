@@ -141,6 +141,9 @@ typedef struct _os_thread_data_t {
     app_pc stack_base;
     app_pc stack_top;
 
+    /* One more than the fd from dr_syscall_set_exec_file(), for the next execve. */
+    int exec_fd_plus1;
+
 #ifdef RETURN_AFTER_CALL
     app_pc stack_bottom_pc; /* return target in the loader at program startup */
 #endif

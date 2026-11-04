@@ -1203,6 +1203,19 @@ dr_syscall_set_sysnum(void *drcontext, int new_num);
 
 DR_API
 /**
+ * Usable only from a pre-syscall event for SYS_execve on UNIX with early injection, whose
+ * path argument then only names the program (AT_EXECFN, the process name).  The app is
+ * loaded from \p fd, which must be an executable 64-bit ELF file open without
+ * close-on-exec, so nothing can swap it between the client's checks and the load.  The
+ * kernel never runs the file itself and DR does not fall back to that.  The new process
+ * finds the descriptor in the DYNAMORIO_EXE_FD environment variable and its client must
+ * close it; if the execve fails, the caller closes it.
+ */
+void
+dr_syscall_set_exec_file(void *drcontext, file_t fd);
+
+DR_API
+/**
  * Usable only from a post-syscall (dr_register_post_syscall_event())
  * event.  An additional system call will be invoked immediately,
  * using the current values of the parameters, which can be set with
