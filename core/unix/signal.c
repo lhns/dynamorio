@@ -1241,6 +1241,9 @@ signal_thread_inherit(dcontext_t *dcontext, void *clone_record)
             d_r_mutex_unlock(&record->parent_info->child_lock);
         }
 
+        if (TESTANY(CLONE_CLEAR_SIGHAND, record->clone_flags))
+            signal_clear_app_handlers(dcontext);
+
         /* itimers are either private or shared */
         if (TESTANY(CLONE_THREAD, record->clone_flags) && os_itimers_thread_shared()) {
             ASSERT(record->info.shared_itimer);
@@ -1411,6 +1414,28 @@ free_pending_signal(thread_sig_info_t *info, int sig)
  * called in dynamorio_fork_init() after os_fork_init() else we clean
  * up data structs used in signal_thread_exit().
  */
+/* What CLONE_CLEAR_SIGHAND does in the kernel, for the app's view of the child: DR takes the
+ * flag off the real syscall (see pre_system_call), which would otherwise reset DR's own handlers.
+ * The child has its own table, as the kernel rejects the flag with CLONE_SIGHAND.
+ */
+void
+signal_clear_app_handlers(dcontext_t *dcontext)
+{
+    thread_sig_info_t *info = (thread_sig_info_t *)dcontext->signal_field;
+    for (int i = 1; i <= MAX_SIGNUM; i++) {
+        kernel_sigaction_t *act = info->sighand->action[i];
+        if (act == NULL)
+            continue;
+        if (act->handler == (handler_t)SIG_IGN) {
+            act->flags = 0;
+            kernel_sigemptyset(&act->mask);
+        } else {
+            handler_free(dcontext, act, sizeof(kernel_sigaction_t));
+            info->sighand->action[i] = NULL;
+        }
+    }
+}
+
 void
 signal_fork_init(dcontext_t *dcontext)
 {

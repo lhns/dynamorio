@@ -118,6 +118,7 @@ extern int suspend_signum;
 #    define CLONE_THREAD 0x00010000
 #    define CLONE_SYSVSEM 0x00040000
 #    define CLONE_SETTLS 0x00080000
+#    define CLONE_CLEAR_SIGHAND 0x100000000ULL
 #    define CLONE_PARENT_SETTID 0x00100000
 #    define CLONE_CHILD_CLEARTID 0x00200000
 #endif

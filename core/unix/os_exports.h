@@ -607,6 +607,8 @@ os_clone_post(dcontext_t *dcontext);
 
 void
 signal_fork_init(dcontext_t *dcontext);
+void
+signal_clear_app_handlers(dcontext_t *dcontext);
 
 void
 signal_remove_alarm_handlers(dcontext_t *dcontext);

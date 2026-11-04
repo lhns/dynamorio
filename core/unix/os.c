@@ -7266,6 +7266,13 @@ handle_clone_pre(dcontext_t *dcontext)
             return false;
         }
         flags = dr_clone_args->flags;
+        /* The flag is taken off the real syscall below, which must not make this pair succeed. */
+        if (TESTANY(CLONE_CLEAR_SIGHAND, flags) && TESTANY(CLONE_SIGHAND, flags)) {
+            set_failure_return_val(dcontext, EINVAL);
+            DODEBUG({ dcontext->expect_last_syscall_to_fail = true; });
+            heap_free(dcontext, dr_clone_args, app_clone_args_size HEAPACCT(ACCT_OTHER));
+            return false;
+        }
 
         /* Save for post_system_call */
         /* We need to save the pointer to the app's clone_args so that we can restore it
@@ -7343,6 +7350,11 @@ handle_clone_pre(dcontext_t *dcontext)
                 (reg_t)dr_clone_args;
             /* The pointer to the app's clone_args was saved in sys_param0 above. */
             create_clone_record(dcontext, NULL, dr_clone_args, app_clone_args);
+            /* The kernel would reset DR's own handlers in the child, which DR needs even
+             * before the child's first app instruction: a fault in is_thread_tls_initialized()
+             * would kill it. The record keeps the flag, and DR emulates it for the app.
+             */
+            dr_clone_args->flags &= ~CLONE_CLEAR_SIGHAND;
         } else {
             /* We replace the app-provided stack pointer with our own stack
              * pointer in create_clone_record. Save the original pointer so
@@ -7359,15 +7371,25 @@ handle_clone_pre(dcontext_t *dcontext)
     } else {
         /* This is really a fork. */
         if (dcontext->sys_num == SYS_clone3) {
-            /* We free this memory before the actual fork, to avoid having to free
-             * it in the parent *and* the child later.
-             */
             ASSERT(app_clone_args_size == (uint)dcontext->sys_param2);
             ASSERT(dr_clone_args == (clone3_syscall_args_t *)dcontext->sys_param1);
-            heap_free(dcontext, dr_clone_args, app_clone_args_size HEAPACCT(ACCT_OTHER));
-            /* We do not need these anymore for the fork case. */
-            dcontext->sys_param1 = 0;
-            dcontext->sys_param2 = 0;
+            if (TESTANY(CLONE_CLEAR_SIGHAND, flags)) {
+                /* As for a thread, on DR's copy; the app's may be read-only. The parent
+                 * and the child each free their copy of it in post_system_call.
+                 */
+                dr_clone_args->flags &= ~CLONE_CLEAR_SIGHAND;
+                *sys_param_addr(dcontext, SYSCALL_PARAM_CLONE3_CLONE_ARGS) =
+                    (reg_t)dr_clone_args;
+            } else {
+                /* We free this memory before the actual fork, to avoid having to free
+                 * it in the parent *and* the child later.
+                 */
+                heap_free(dcontext, dr_clone_args,
+                          app_clone_args_size HEAPACCT(ACCT_OTHER));
+                /* We do not need these anymore for the fork case. */
+                dcontext->sys_param1 = 0;
+                dcontext->sys_param2 = 0;
+            }
         }
         os_fork_pre(dcontext);
     }
@@ -9145,6 +9167,11 @@ post_system_call(dcontext_t *dcontext)
              * by waiting till here to fixup the child logfolder/file and tid?
              */
             dynamorio_fork_init(dcontext);
+#ifdef LINUX
+            if (sysnum == SYS_clone3 &&
+                TESTANY(CLONE_CLEAR_SIGHAND, (uint64)get_stored_clone3_flags(dcontext)))
+                signal_clear_app_handlers(dcontext);
+#endif
 
             LOG(THREAD, LOG_SYSCALLS, 1,
                 "after fork-like syscall: parent is %d, child is %d\n", parent, child);
@@ -9446,6 +9473,14 @@ post_system_call(dcontext_t *dcontext)
                 set_syscall_param(dcontext, SYSCALL_PARAM_CLONE_STACK,
                                   dcontext->sys_param1);
             }
+        } else if (sysnum == SYS_clone3 && dcontext->sys_param1 != 0) {
+            /* A fork that ran on DR's copy of clone_args, in the parent and in the child. */
+#    ifdef X86
+            set_syscall_param(dcontext, SYSCALL_PARAM_CLONE3_CLONE_ARGS,
+                              dcontext->sys_param0);
+#    endif
+            heap_free(dcontext, (clone3_syscall_args_t *)dcontext->sys_param1,
+                      (uint)dcontext->sys_param2 HEAPACCT(ACCT_OTHER));
         }
         break;
     }
