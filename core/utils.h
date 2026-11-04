@@ -932,10 +932,13 @@ dr_modload_hook_exists(void); /* hard to include instrument.h here */
         if (USE_BB_BUILDING_LOCK() && bb_building_lock.lock_requests > LOCK_FREE_STATE) \
             d_r_mutex_unlock(&(bb_building_lock));                                      \
     } while (0)
-/* we assume dynamo_resetting is only done w/ all threads suspended */
+/* we assume dynamo_resetting is only done w/ all threads suspended.
+ * dynamo_exited can be set while other threads run, so it must not be tested here: a
+ * thread that acquired before it was set would skip the release and leak the lock.
+ */
 #define NEED_SHARED_LOCK(flags)                                                \
     (TESTANY(FRAG_SHARED, (flags)) && !INTERNAL_OPTION(single_thread_in_DR) && \
-     !dynamo_exited && !dynamo_resetting)
+     !dynamo_exited_all_other_threads && !dynamo_resetting)
 #define SHARED_FLAGS_MUTEX(flags, operation, lock) \
     do {                                           \
         if (NEED_SHARED_LOCK((flags)))             \
