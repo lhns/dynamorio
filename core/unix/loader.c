@@ -2279,7 +2279,19 @@ privload_early_inject(void **sp, byte *old_libdr_base, size_t old_libdr_size)
      */
     set_app_args((int *)argc, argv);
 
-    success = elf_loader_read_headers(&exe_ld, exe_path);
+    /* DYNAMORIO_EXE_FD, if set, is the file to load; exe_path then only names it. */
+    {
+        const char *exe_file = exe_path;
+        const char *exe_fd = getenv(DYNAMORIO_VAR_EXE_FD);
+        char exe_fd_path[32];
+        if (exe_fd != NULL && exe_fd[0] >= '0' && exe_fd[0] <= '9') {
+            snprintf(exe_fd_path, BUFFER_SIZE_ELEMENTS(exe_fd_path), "/proc/self/fd/%s",
+                     exe_fd);
+            NULL_TERMINATE_BUFFER(exe_fd_path);
+            exe_file = exe_fd_path;
+        }
+        success = elf_loader_read_headers(&exe_ld, exe_file);
+    }
     apicheck(success,
              "Failed to read app ELF headers.  Check path and "
              "architecture.");

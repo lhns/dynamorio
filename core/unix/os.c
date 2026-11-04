@@ -5868,6 +5868,16 @@ dr_syscall_set_sysnum(void *drcontext, int new_num)
 
 DR_API
 void
+dr_syscall_set_exec_file(void *drcontext, file_t fd)
+{
+    dcontext_t *dcontext = (dcontext_t *)drcontext;
+    CLIENT_ASSERT(dcontext->client_data->in_pre_syscall,
+                  "dr_syscall_set_exec_file() can only be called from a pre-syscall event");
+    ((os_thread_data_t *)dcontext->os_field)->exec_fd_plus1 = fd + 1;
+}
+
+DR_API
+void
 dr_syscall_invoke_another(void *drcontext)
 {
     dcontext_t *dcontext = (dcontext_t *)drcontext;
@@ -6070,6 +6080,7 @@ enum {
     ENV_PROP_OPTIONS,
     ENV_PROP_EXECVE_LOGDIR,
     ENV_PROP_EXE_PATH,
+    ENV_PROP_EXE_FD,
     ENV_PROP_CONFIGDIR,
 };
 
@@ -6085,6 +6096,8 @@ static const char *const env_to_propagate[] = {
     DYNAMORIO_VAR_EXECVE_LOGDIR,
     /* i#909: needed for early injection */
     DYNAMORIO_VAR_EXE_PATH,
+    /* Always set, to -1 if unused: the app's env may hold its own process's value. */
+    DYNAMORIO_VAR_EXE_FD,
     /* These will only be propagated if they exist: */
     DYNAMORIO_VAR_CONFIGDIR,
     DYNAMORIO_VAR_AUTOINJECT,
@@ -6102,12 +6115,14 @@ static const char *const env_to_propagate[] = {
  * config dir takes precedence (if the child clears the HOME env var, e.g.).
  */
 static void
-add_dr_env_vars(dcontext_t *dcontext, char *inject_library_path, const char *app_path)
+add_dr_env_vars(dcontext_t *dcontext, char *inject_library_path, const char *app_path,
+                int exec_fd)
 {
     char **envp = (char **)sys_param(dcontext, 2);
     int idx, j, preload = -1, ldpath = -1;
     int num_old, num_new, sz;
     bool need_var[NUM_ENV_TO_PROPAGATE];
+    char exec_fd_str[16];
     int prop_idx[NUM_ENV_TO_PROPAGATE];
     bool ldpath_us = false, preload_us = false;
     char **new_envp, *var, *old;
@@ -6128,8 +6143,10 @@ add_dr_env_vars(dcontext_t *dcontext, char *inject_library_path, const char *app
     else
         need_var[ENV_PROP_EXECVE_LOGDIR] = false;
 
-    if (DYNAMO_OPTION(early_inject))
+    if (DYNAMO_OPTION(early_inject)) {
         need_var[ENV_PROP_EXE_PATH] = true;
+        need_var[ENV_PROP_EXE_FD] = true;
+    }
 
     /* iterate the env in target process  */
     if (envp == NULL) {
@@ -6179,8 +6196,9 @@ add_dr_env_vars(dcontext_t *dcontext, char *inject_library_path, const char *app
              : (((preload < 0) ? 1 : 0) + ((ldpath < 0) ? 1 : 0)));
 
     for (j = 0; j < NUM_ENV_TO_PROPAGATE; j++) {
-        if ((DYNAMO_OPTION(follow_children) || j == ENV_PROP_EXE_PATH) && need_var[j] &&
-            prop_idx[j] < 0)
+        if ((DYNAMO_OPTION(follow_children) || j == ENV_PROP_EXE_PATH ||
+             j == ENV_PROP_EXE_FD) &&
+            need_var[j] && prop_idx[j] < 0)
             num_new++;
     }
     /* setup new envp */
@@ -6241,7 +6259,8 @@ add_dr_env_vars(dcontext_t *dcontext, char *inject_library_path, const char *app
         const char *val = "";
         if (!need_var[j])
             continue;
-        if (!DYNAMO_OPTION(follow_children) && j != ENV_PROP_EXE_PATH)
+        if (!DYNAMO_OPTION(follow_children) && j != ENV_PROP_EXE_PATH &&
+            j != ENV_PROP_EXE_FD)
             continue;
         switch (j) {
         case ENV_PROP_RUNUNDER:
@@ -6264,6 +6283,12 @@ add_dr_env_vars(dcontext_t *dcontext, char *inject_library_path, const char *app
         case ENV_PROP_EXE_PATH:
             ASSERT(strcmp(env_to_propagate[j], DYNAMORIO_VAR_EXE_PATH) == 0);
             val = app_path;
+            break;
+        case ENV_PROP_EXE_FD:
+            ASSERT(strcmp(env_to_propagate[j], DYNAMORIO_VAR_EXE_FD) == 0);
+            snprintf(exec_fd_str, BUFFER_SIZE_ELEMENTS(exec_fd_str), "%d", exec_fd);
+            NULL_TERMINATE_BUFFER(exec_fd_str);
+            val = exec_fd_str;
             break;
         default:
             val = getenv(env_to_propagate[j]);
@@ -6463,8 +6488,12 @@ handle_execve(dcontext_t *dcontext)
 #if defined(LINUX) || defined(DEBUG)
     const char **argv;
 #endif
+    /* Set by the client, which then has judged the file and resolved any script itself. */
+    os_thread_data_t *ostd = (os_thread_data_t *)dcontext->os_field;
+    int exec_fd = ostd->exec_fd_plus1 - 1;
+    ostd->exec_fd_plus1 = 0;
 
-    if (DYNAMO_OPTION(follow_children) && DYNAMO_OPTION(early_inject)) {
+    if (DYNAMO_OPTION(follow_children) && DYNAMO_OPTION(early_inject) && exec_fd < 0) {
         int ret = handle_execve_script(dcontext);
         if (ret != 0)
             return ret;
@@ -6534,14 +6563,16 @@ handle_execve(dcontext_t *dcontext)
 #endif
 
     /* Issue 20: handle cross-architecture execve */
-    file = os_open(fname, OS_OPEN_READ);
-    if (file != INVALID_FILE) {
-        if (!module_file_is_module64(file, &x64,
-                                     NULL /*only care about primary==execve*/))
+    if (exec_fd < 0) {
+        file = os_open(fname, OS_OPEN_READ);
+        if (file != INVALID_FILE) {
+            if (!module_file_is_module64(file, &x64,
+                                         NULL /*only care about primary==execve*/))
+                expect_to_fail = true;
+            os_close(file);
+        } else
             expect_to_fail = true;
-        os_close(file);
-    } else
-        expect_to_fail = true;
+    }
     inject_library_path =
         IF_X64_ELSE(x64, !x64) ? dynamorio_library_path : dynamorio_alt_arch_path;
 
@@ -6556,8 +6587,12 @@ handle_execve(dcontext_t *dcontext)
             should_inject = rununder_on;
     }
 
+    /* Falling through to a real exec of fname is what the descriptor is there to prevent. */
+    if (exec_fd >= 0)
+        should_inject = true;
+
     if (should_inject)
-        add_dr_env_vars(dcontext, inject_library_path, fname);
+        add_dr_env_vars(dcontext, inject_library_path, fname, exec_fd);
     else {
         dcontext->sys_param0 = 0;
         dcontext->sys_param1 = 0;
