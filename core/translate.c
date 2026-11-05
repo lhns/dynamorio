@@ -972,6 +972,7 @@ recreate_app_state_from_ilist(dcontext_t *tdcontext, instrlist_t *ilist, byte *s
     cache_pc target_cache = mc->pc;
     recreate_success_t res = (just_pc ? RECREATE_SUCCESS_PC : RECREATE_SUCCESS_STATE);
     translate_walk_t walk;
+    bool past_bundle_start = false;
 
     LOG(THREAD_GET, LOG_INTERP, 3,
         "recreate_app : looking for " PFX " in frag @ " PFX " (tag " PFX ")\n",
@@ -1036,6 +1037,10 @@ recreate_app_state_from_ilist(dcontext_t *tdcontext, instrlist_t *ilist, byte *s
             LOG(THREAD_GET, LOG_INTERP, 3,
                 "recreate_app -- target is inside short-cti bundle %p-%p\n", cpc,
                 cpc + len);
+            /* Past the cti at the bundle's start, a loop has already decremented xcx:
+             * translated to the loop, it would run again, forever if xcx reached 0.
+             */
+            past_bundle_start = cpc < target_cache;
             cpc = target_cache;
         }
         if (cpc >= target_cache) {
@@ -1152,7 +1157,8 @@ recreate_app_state_from_ilist(dcontext_t *tdcontext, instrlist_t *ilist, byte *s
                     }
                 }
             }
-            if (boundary_only && !translate_walk_at_app_boundary(&walk, inst))
+            if (boundary_only &&
+                (past_bundle_start || !translate_walk_at_app_boundary(&walk, inst)))
                 res = RECREATE_SUCCESS_PC;
             if (!just_pc)
                 translate_walk_restore(tdcontext, &walk, inst, answer);
