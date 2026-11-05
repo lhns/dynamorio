@@ -600,6 +600,23 @@ translate_walk_track_post_instr(dcontext_t *tdcontext, instr_t *inst,
     }
 }
 
+/* Whether the app's state is entirely in the machine's at this instr: not in mangling,
+ * a clean call or client code, where it is partly elsewhere (flags, i#400; a clean call's
+ * saved state, i#4219) or known only to a restore that may not cover every window.
+ */
+static bool
+translate_walk_at_app_boundary(translate_walk_t *walk, instr_t *inst)
+{
+    if (walk->in_mangle_region || walk->in_clean_call || walk->xsp_adjust != 0 ||
+        walk->unsupported_mangle || !instr_is_app(inst))
+        return false;
+    for (uint r = 0; r < REG_SPILL_NUM; r++) {
+        if (walk->reg_spill_offs[r] != UINT_MAX)
+            return false;
+    }
+    return true;
+}
+
 static bool
 translate_walk_good_state(dcontext_t *tdcontext, translate_walk_t *walk,
                           app_pc translate_pc)
@@ -791,7 +808,7 @@ translate_clear_last_direct_translation(dcontext_t *dcontext)
 static recreate_success_t
 recreate_app_state_from_info(dcontext_t *tdcontext, const translation_info_t *info,
                              byte *start_cache, byte *end_cache, priv_mcontext_t *mc,
-                             bool just_pc _IF_DEBUG(uint flags))
+                             bool just_pc, bool boundary_only _IF_DEBUG(uint flags))
 {
     byte *answer = NULL;
     byte *cpc, *prev_cpc;
@@ -880,7 +897,10 @@ recreate_app_state_from_info(dcontext_t *tdcontext, const translation_info_t *in
     ASSERT(cpc < end_cache);
     instr_free(tdcontext, &instr);
 
-    if (answer == NULL || !translate_walk_good_state(tdcontext, &walk, answer)) {
+    /* Stored info does not say what is meta, so this stands for the mangling it can see. */
+    if (boundary_only && (ours || in_clean_call)) {
+        res = RECREATE_SUCCESS_PC;
+    } else if (answer == NULL || !translate_walk_good_state(tdcontext, &walk, answer)) {
         /* PR 214962: we're either in client meta-code (NULL translation) or
          * post-app-fault in our own manglings: we shouldn't get an app
          * fault in either case, so it's ok to fail, and neither is a safe
@@ -944,7 +964,7 @@ recreate_app_state_from_info(dcontext_t *tdcontext, const translation_info_t *in
 static recreate_success_t
 recreate_app_state_from_ilist(dcontext_t *tdcontext, instrlist_t *ilist, byte *start_app,
                               byte *start_cache, byte *end_cache, priv_mcontext_t *mc,
-                              bool just_pc, uint flags)
+                              bool just_pc, bool boundary_only, uint flags)
 {
     byte *answer = NULL;
     byte *cpc, *prev_bytes;
@@ -1132,6 +1152,8 @@ recreate_app_state_from_ilist(dcontext_t *tdcontext, instrlist_t *ilist, byte *s
                     }
                 }
             }
+            if (boundary_only && !translate_walk_at_app_boundary(&walk, inst))
+                res = RECREATE_SUCCESS_PC;
             if (!just_pc)
                 translate_walk_restore(tdcontext, &walk, inst, answer);
             answer = translate_restore_special_cases(tdcontext, answer);
@@ -1248,7 +1270,8 @@ restore_stolen_register(dcontext_t *dcontext, priv_mcontext_t *mcontext)
  * translation. */
 static recreate_success_t
 recreate_app_state_internal(dcontext_t *tdcontext, priv_mcontext_t *mcontext,
-                            bool just_pc, fragment_t *owning_f, bool restore_memory)
+                            bool just_pc, fragment_t *owning_f, bool restore_memory,
+                            bool boundary_only)
 {
     recreate_success_t res = (just_pc ? RECREATE_SUCCESS_PC : RECREATE_SUCCESS_STATE);
     dr_mcontext_t xl8_mcontext;
@@ -1538,12 +1561,13 @@ recreate_app_state_internal(dcontext_t *tdcontext, priv_mcontext_t *mcontext,
                    INTERNAL_OPTION(safe_translate_flushed));
             res = recreate_app_state_from_info(
                 tdcontext, FRAGMENT_TRANSLATION_INFO(f), (byte *)f->start_pc,
-                (byte *)f->start_pc + f->size, mcontext, just_pc _IF_DEBUG(f->flags));
+                (byte *)f->start_pc + f->size, mcontext, just_pc,
+                boundary_only _IF_DEBUG(f->flags));
             STATS_INC(recreate_via_stored_info);
         } else {
             res = recreate_app_state_from_ilist(
                 tdcontext, ilist, (byte *)f->tag, (byte *)FCACHE_ENTRY_PC(f),
-                (byte *)f->start_pc + f->size, mcontext, just_pc, f->flags);
+                (byte *)f->start_pc + f->size, mcontext, just_pc, boundary_only, f->flags);
             STATS_INC(recreate_via_app_ilist);
         }
         DEBUG_DECLARE(ok =) dr_set_isa_mode(tdcontext, old_mode, NULL);
@@ -1588,6 +1612,15 @@ recreate_app_state_internal(dcontext_t *tdcontext, priv_mcontext_t *mcontext,
     }
 }
 
+/* The query synch makes before it may relocate a thread: RECREATE_SUCCESS_STATE only at an
+ * app instr with all state in the machine.  Same locking rules as recreate_app_state().
+ */
+recreate_success_t
+recreate_app_state_at_boundary(dcontext_t *tdcontext, priv_mcontext_t *mcontext)
+{
+    return recreate_app_state_internal(tdcontext, mcontext, false, NULL, false, true);
+}
+
 /* Assumes that pc is a pc_recreatable place (i.e. in_fcache(), though could do
  * syscalls with esp, also see FIXME about separate stubs in
  * recreate_app_state_internal()), ASSERTs otherwise.
@@ -1619,7 +1652,7 @@ recreate_app_pc(dcontext_t *tdcontext, cache_pc pc, fragment_t *f)
     memset(&mc, 0, sizeof(mc)); /* ensures esp is NULL */
     mc.pc = pc;
 
-    res = recreate_app_state_internal(tdcontext, &mc, true, f, false);
+    res = recreate_app_state_internal(tdcontext, &mc, true, f, false, false);
     if (res != RECREATE_SUCCESS_PC) {
         ASSERT(res != RECREATE_SUCCESS_STATE); /* shouldn't return that for just_pc */
         ASSERT(in_fcache(pc));                 /* Make sure caller didn't screw up */
@@ -1684,7 +1717,8 @@ recreate_app_state(dcontext_t *tdcontext, priv_mcontext_t *mcontext, bool restor
     }
 #endif
 
-    res = recreate_app_state_internal(tdcontext, mcontext, false, f, restore_memory);
+    res = recreate_app_state_internal(tdcontext, mcontext, false, f, restore_memory,
+                                      false);
 
 #ifdef DEBUG
     if (res) {
