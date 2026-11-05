@@ -6964,7 +6964,9 @@ terminate_via_kill(dcontext_t *dcontext)
     memset(&info->app_sigblocked, 0, sizeof(info->app_sigblocked));
 
     /* FIXME PR 541760: there can be multiple thread groups and thus
-     * this may not exit all threads in the address space
+     * this may not exit all threads in the address space.  A thread alone in its group
+     * exits alone: a process exit would wait for its vfork parent, which the kernel
+     * holds until this thread is gone.
      */
     block_cleanup_and_terminate(
         dcontext, SYS_kill,
@@ -6972,7 +6974,7 @@ terminate_via_kill(dcontext_t *dcontext)
          * in which case will get -ESRCH
          */
         IF_VMX86(os_in_vmkernel_userworld() ? -(int)get_process_id() :) get_process_id(),
-        dcontext->sys_param0, true, 0, 0);
+        dcontext->sys_param0, !is_alone_in_secondary_thread_group(), 0, 0);
     ASSERT_NOT_REACHED();
 }
 
@@ -7177,15 +7179,18 @@ execute_default_action(dcontext_t *dcontext, int sig, sigframe_rt_t *frame,
                 /* i#552: cleanup and raise client exit event */
                 int instr_sz = 0;
                 thread_sig_info_t *info;
+                /* We enter from several different places, so rewind until
+                 * top-level kstat.
+                 */
+                KSTOP_REWIND_UNTIL(thread_measured);
+                /* No process exit, so no re-execution: see terminate_via_kill(). */
+                if (is_alone_in_secondary_thread_group())
+                    terminate_via_kill_from_anywhere(dcontext, sig);
                 /* We are on the sigstack now, so assign it to NULL to avoid being
                  * freed during process exit cleanup
                  */
                 info = (thread_sig_info_t *)dcontext->signal_field;
                 info->sigstack.ss_sp = NULL;
-                /* We enter from several different places, so rewind until
-                 * top-level kstat.
-                 */
-                KSTOP_REWIND_UNTIL(thread_measured);
                 /* We try to raise the same signal in app's context so a correct
                  * coredump can be generated. However, the client might change
                  * the code in a way that the corresponding app code won't

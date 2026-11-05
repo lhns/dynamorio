@@ -6443,6 +6443,53 @@ cleanup_after_vfork_execve(dcontext_t *dcontext)
                      num_threads * sizeof(thread_record_t *) HEAPACCT(ACCT_THREAD_MGT));
 }
 
+/* A vfork has returned, so its child has exec'ed, exited or died.  One that a signal
+ * killed ran no exit path, and its stale record would hang the next synch.
+ * Not handled: a child killed holding a DR lock or before dynamo_thread_init().
+ */
+static void
+cleanup_after_vfork_child_death(dcontext_t *dcontext, ptr_int_t child)
+{
+    thread_record_t *tr;
+    if (child <= 0)
+        return;
+    d_r_mutex_lock(&thread_initexit_lock);
+    tr = thread_lookup((thread_id_t)child);
+    if (tr != NULL && !tr->execve) {
+        LOG(THREAD, LOG_SYSCALLS, 2, "cleaning up dead vfork child " TIDFMT "
+", tr->id);
+        dynamo_other_thread_exit(tr);
+    }
+    d_r_mutex_unlock(&thread_initexit_lock);
+}
+
+/* True if this thread is alone in its thread group while other groups share the address
+ * space, as a vfork child is.
+ */
+bool
+is_alone_in_secondary_thread_group(void)
+{
+    process_id_t mypid = get_process_id();
+    thread_id_t myid = d_r_get_thread_id();
+    thread_record_t **threads;
+    int num_threads, i;
+    bool others = false, alone = true;
+    d_r_mutex_lock(&thread_initexit_lock);
+    get_list_of_threads(&threads, &num_threads);
+    for (i = 0; i < num_threads; i++) {
+        if (IS_CLIENT_THREAD(threads[i]->dcontext))
+            continue;
+        if (threads[i]->pid != mypid)
+            others = true;
+        else if (threads[i]->id != myid)
+            alone = false;
+    }
+    d_r_mutex_unlock(&thread_initexit_lock);
+    global_heap_free(threads,
+                     num_threads * sizeof(thread_record_t *) HEAPACCT(ACCT_THREAD_MGT));
+    return others && alone;
+}
+
 static void
 set_stdfile_fileno(stdfile_t **stdfile, file_t old_fd, file_t file_no)
 {
@@ -9208,6 +9255,10 @@ post_system_call(dcontext_t *dcontext)
                 set_syscall_param(dcontext, SYSCALL_PARAM_CLONE_STACK,
                                   dcontext->sys_param1);
             }
+            if (TEST(CLONE_VFORK,
+                     sysnum == SYS_clone3 ? get_stored_clone3_flags(dcontext)
+                                          : (uint64)dcontext->sys_param0))
+                cleanup_after_vfork_child_death(dcontext, MCXT_SYSCALL_RES(mc));
         } else if (sysnum == SYS_clone3 && dcontext->sys_param1 != 0) {
             /* A fork that ran on DR's copy of clone_args, in the parent and in the child. */
 #    ifdef X86
@@ -9257,6 +9308,7 @@ post_system_call(dcontext_t *dcontext)
                 os_switch_lib_tls(dcontext, false /*to dr*/);
             }
             /* i#2089: we already restored the DR tls in os_clone_post() */
+            cleanup_after_vfork_child_death(dcontext, MCXT_SYSCALL_RES(mc));
         }
         break;
     }
