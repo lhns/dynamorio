@@ -1177,6 +1177,8 @@ fcache_pc_state(cache_pc lookup_pc)
                unit->end_pc, pc);
 }
 
+volatile int diag_deleter;
+
 fragment_t *
 fcache_fragment_pclookup(dcontext_t *dcontext, cache_pc lookup_pc, fragment_t *wrapper)
 {
@@ -3742,6 +3744,17 @@ fcache_remove_fragment(dcontext_t *dcontext, fragment_t *f)
     ASSERT(dcontext != GLOBAL_DCONTEXT || dynamo_exited || dynamo_resetting ||
            TEST(FRAG_WAS_DELETED, f->flags) || is_self_allsynch_flushing());
     PROTECT_CACHE(cache, lock);
+    {
+        fragment_t *occ = *(fragment_t **)FRAG_HDR_START(f);
+        if (occ != f) {
+            print_file(STDERR, "@@F double free: f=%p start=%p size=%x tag=%p flags=%x deleter=%d tid=%d occupant=%p\n", f,
+                       f->start_pc, (uint)f->size, f->tag, f->flags, diag_deleter, d_r_get_thread_id(), occ);
+            if (occ != NULL && !FRAG_IS_FREE_LIST(occ))
+                print_file(STDERR, "@@F occupant start=%p size=%x tag=%p flags=%x\n", occ->start_pc, (uint)occ->size,
+                           occ->tag, occ->flags);
+            os_terminate(dcontext, TERMINATE_PROCESS);
+        }
+    }
 
     LOG(THREAD, LOG_CACHE, 4, "fcache_remove_fragment: F%d from %s unit\n", f->id,
         cache->name);

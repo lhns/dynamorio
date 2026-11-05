@@ -3050,6 +3050,7 @@ fragment_delete(dcontext_t *dcontext, fragment_t *f, uint actions)
 
     if (!TEST(FRAGDEL_NO_FCACHE, actions)) {
         fcache_remove_fragment(dcontext, f);
+        diag_deleter = 0;
     }
 
 #ifdef SIDELINE

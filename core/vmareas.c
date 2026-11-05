@@ -9370,6 +9370,7 @@ check_lazy_deletion_list(dcontext_t *dcontext, uint flushtime)
                 ASSERT(todelete->lazy_delete_list == NULL);
                 todelete->lazy_delete_tail = NULL;
             }
+            diag_deleter = 2;
 #ifdef X86
             DODEBUG({ /* Raise SIGILL if a deleted fragment gets executed again */
                       *(ushort *)vmcode_get_writable_addr(f->start_pc) =
@@ -9840,6 +9841,7 @@ vm_area_check_shared_pending(dcontext_t *dcontext, fragment_t *was_I_flushed)
             /* do NOT call vm_area_remove_fragment, as it will freak out trying
              * to look up the area this fragment is in
              */
+            diag_deleter = 1;
             fragment_delete(dcontext, FRAG_FRAG(entry),
                             FRAGDEL_NO_OUTPUT | FRAGDEL_NO_UNLINK | FRAGDEL_NO_HTABLE |
                                 FRAGDEL_NO_VMAREA);
@@ -9923,7 +9925,7 @@ vm_area_flush_fragments(dcontext_t *dcontext, fragment_t *was_I_flushed)
                 }
                 ASSERT(TEST(FRAG_WAS_DELETED, FRAG_FRAG(entry)->flags));
                 ASSERT(FRAG_ALSO_DEL_OK(entry) == NULL);
-                fragment_delete(dcontext, FRAG_FRAG(entry),
+                diag_deleter = 3; fragment_delete(dcontext, FRAG_FRAG(entry),
                                 /* We used to leave link, vmarea, and htable removal
                                  * until here for private fragments, but for case
                                  * 3559 we wanted link removal at unlink time, and
@@ -10187,7 +10189,7 @@ vm_area_allsynch_flush_fragments(dcontext_t *dcontext, dcontext_t *del_dcontext,
                             fragment_remove_from_ibt_tables(dcontext, FRAG_FRAG(entry),
                                                             true /*rm from shared*/);
                         }
-                        fragment_delete(dcontext, FRAG_FRAG(entry), FRAGDEL_ALL);
+                        diag_deleter = 4; fragment_delete(dcontext, FRAG_FRAG(entry), FRAGDEL_ALL);
                         STATS_INC(num_fragments_deleted_consistency);
                         DODEBUG({ num_fine++; });
                     } else {
