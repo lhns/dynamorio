@@ -96,6 +96,9 @@ typedef enum {
 } recreate_success_t;
 
 recreate_success_t
+recreate_app_state_at_boundary(dcontext_t *tdcontext, priv_mcontext_t *mcontext);
+
+recreate_success_t
 recreate_app_state(dcontext_t *tdcontext, priv_mcontext_t *mcontext, bool restore_memory,
                    fragment_t *f);
 
