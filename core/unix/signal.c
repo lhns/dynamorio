@@ -6144,6 +6144,10 @@ main_signal_handler_C(byte *xsp)
             /* special case: we expect a seg fault for executable regions
              * that were writable and marked read-only by us.
              */
+            {
+                static volatile int xonce;
+                if (is_write && xonce == 0) { xonce = 1; print_file(STDERR, "@@N control fault\n"); fcache_pc_state((cache_pc)pc); }
+            }
             if (is_write &&
                 check_for_modified_code(dcontext, pc, ucxt, target, false /*!native*/)) {
                 /* it was our signal, so don't pass to app -- return now */
@@ -6154,6 +6158,13 @@ main_signal_handler_C(byte *xsp)
             uint xf = 0, xr = 0, xp = 0; bool xfound = vmareas_diag(target, &xf, &xr);
             app_pc xb = NULL; size_t xs = 0; bool xm = get_memory_info(target, &xb, &xs, &xp);
             fragment_t xw; fragment_t *xfr = fragment_pclookup(dcontext, pc, &xw);
+            fcache_pc_state((cache_pc)pc);
+            {
+                byte *xc = (byte *)pc;
+                print_file(STDERR, "@@B %02x %02x %02x %02x %02x %02x %02x %02x tid=%d next_tag=%p last_exit=%p at_syscall=%d\n",
+                           xc[0], xc[1], xc[2], xc[3], xc[4], xc[5], xc[6], xc[7], d_r_get_thread_id(), dcontext->next_tag,
+                           dcontext->last_exit, get_at_syscall(dcontext));
+            }
             print_file(STDERR, "@@X sig=%d pc=%p target=%p write=%d syscall=%d si_addr=%p si_code=%d area=%d vm=%x frag=%x mem=%d base=%p size=%x prot=%x f=%p tag=%p fflags=%x where=%d last=%p\n",
                        sig, pc, target, is_write, syscall_signal, siginfo->si_addr, siginfo->si_code, xfound, xf, xr, xm, xb, (uint)xs, xp, xfr,
                        xfr == NULL ? NULL : xfr->tag, xfr == NULL ? 0 : xfr->flags, dcontext->whereami, dcontext->last_fragment);

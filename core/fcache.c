@@ -1139,6 +1139,44 @@ fcache_lookup_unit(cache_pc pc)
 }
 
 /* Returns the fragment_t whose body (not cache slot) contains lookup_pc */
+/* diag: what the cache holds at pc, read without locks since we may be dying. */
+void
+fcache_pc_state(cache_pc lookup_pc)
+{
+    fragment_t *f;
+    cache_pc pc;
+    fcache_unit_t *unit = fcache_lookup_unit(lookup_pc);
+    if (unit == NULL) {
+        print_file(STDERR, "@@S pc=%p no unit\n", lookup_pc);
+        return;
+    }
+    pc = unit->start_pc;
+    while (pc < unit->cur_pc && pc <= lookup_pc) {
+        f = *((fragment_t **)pc);
+        if (!USE_FIFO_FOR_CACHE(unit->cache) && FRAG_IS_FREE_LIST(f)) {
+            size_t sz = ((free_list_header_t *)pc)->size;
+            if (lookup_pc < pc + sz) {
+                print_file(STDERR, "@@S pc=%p FREE block=%p size=%x\n", lookup_pc, pc, (uint)sz);
+                return;
+            }
+            pc += sz;
+            continue;
+        }
+        if (f == NULL) {
+            print_file(STDERR, "@@S pc=%p null header at %p\n", lookup_pc, pc);
+            return;
+        }
+        if (lookup_pc < pc + FRAG_SIZE(f)) {
+            print_file(STDERR, "@@S pc=%p f=%p empty=%d start=%p size=%x tag=%p flags=%x id=%d\n", lookup_pc, f,
+                       FRAG_EMPTY(f), f->start_pc, (uint)f->size, f->tag, f->flags, FRAG_ID(f));
+            return;
+        }
+        pc += FRAG_SIZE(f);
+    }
+    print_file(STDERR, "@@S pc=%p past walk: unit=%p cur=%p end=%p at=%p\n", lookup_pc, unit->start_pc, unit->cur_pc,
+               unit->end_pc, pc);
+}
+
 fragment_t *
 fcache_fragment_pclookup(dcontext_t *dcontext, cache_pc lookup_pc, fragment_t *wrapper)
 {

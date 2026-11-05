@@ -165,6 +165,9 @@ bool
 fragment_lookup_deleted(dcontext_t *dcontext, app_pc tag);
 
 /* Returns the fragment_t whose body (not cache slot) contains lookup_pc */
+void
+fcache_pc_state(cache_pc lookup_pc);
+
 fragment_t *
 fcache_fragment_pclookup(dcontext_t *dcontext, cache_pc lookup_pc, fragment_t *wrapper);
 
