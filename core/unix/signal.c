@@ -6140,6 +6140,14 @@ main_signal_handler_C(byte *xsp)
         /* if get here, pass the signal to the app */
 
         ASSERT(pc != 0); /* shouldn't get here */
+        {
+            uint xf = 0, xr = 0; bool xfound = vmareas_diag(target, &xf, &xr);
+            fragment_t xw; fragment_t *xfr = fragment_pclookup(dcontext, pc, &xw);
+            print_file(STDERR, "@@D sig=%d pc=%p target=%p write=%d syscall=%d si_addr=%p si_code=%d area=%d vm=%x frag=%x f=%p tag=%p fflags=%x where=%d last=%p
+",
+                       sig, pc, target, is_write, syscall_signal, siginfo->si_addr, siginfo->si_code, xfound, xf, xr, xfr,
+                       xfr == NULL ? NULL : xfr->tag, xfr == NULL ? 0 : xfr->flags, dcontext->whereami, dcontext->last_fragment);
+        }
         if (sig == SIGSEGV && !syscall_signal /*only for in-cache signals*/) {
             /* special case: we expect a seg fault for executable regions
              * that were writable and marked read-only by us.

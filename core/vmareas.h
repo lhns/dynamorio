@@ -343,6 +343,9 @@ bool
 is_pretend_or_executable_writable(app_pc addr);
 
 bool
+vmareas_diag(app_pc addr, uint *vm, uint *fr);
+
+bool
 was_executable_area_writable(app_pc addr);
 
 /* returns false if addr is not in an executable area that

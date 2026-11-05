@@ -7205,6 +7205,18 @@ was_address_flush_start(dcontext_t *dcontext, app_pc pc)
 
 /****************************************************************************/
 
+bool
+vmareas_diag(app_pc addr, uint *vm, uint *fr)
+{
+    vm_area_t *area;
+    bool ok;
+    d_r_read_lock(&executable_areas->lock);
+    ok = lookup_addr(executable_areas, addr, &area);
+    if (ok) { *vm = area->vm_flags; *fr = area->frag_flags; }
+    d_r_read_unlock(&executable_areas->lock);
+    return ok;
+}
+
 /* a helper function for check_thread_vm_area
  * assumes caller owns executable_areas write lock */
 static void
