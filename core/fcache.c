@@ -1168,7 +1168,7 @@ fcache_pc_state(cache_pc lookup_pc)
         }
         if (lookup_pc < pc + FRAG_SIZE(f)) {
             print_file(STDERR, "@@S pc=%p f=%p empty=%d start=%p size=%x tag=%p flags=%x id=%d\n", lookup_pc, f,
-                       FRAG_EMPTY(f), f->start_pc, (uint)f->size, f->tag, f->flags, FRAG_ID(f));
+                       FRAG_EMPTY(f), f->start_pc, (uint)f->size, f->tag, f->flags);
             return;
         }
         pc += FRAG_SIZE(f);
