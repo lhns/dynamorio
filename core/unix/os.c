@@ -6456,8 +6456,8 @@ cleanup_after_vfork_child_death(dcontext_t *dcontext, ptr_int_t child)
     d_r_mutex_lock(&thread_initexit_lock);
     tr = thread_lookup((thread_id_t)child);
     if (tr != NULL && !tr->execve) {
-        LOG(THREAD, LOG_SYSCALLS, 2, "cleaning up dead vfork child " TIDFMT "
-", tr->id);
+        LOG(THREAD, LOG_SYSCALLS, 2, "cleaning up dead vfork child " TIDFMT "\n",
+            tr->id);
         dynamo_other_thread_exit(tr);
     }
     d_r_mutex_unlock(&thread_initexit_lock);
