@@ -472,7 +472,12 @@ translate_walk_track_post_instr(dcontext_t *tdcontext, instr_t *inst,
                 ASSERT(spill || walk->reg_tls[r] == spill_tls);
                 if (spill) {
                     ASSERT(offs != UINT_MAX);
-                    walk->reg_spill_offs[r] = offs;
+                    /* The first spill holds the app's value. A later store is not a
+                     * spill of it: the x64 trace compare stores the speculative tag
+                     * from xax to a second slot (mangle_x64_ib_in_trace).
+                     */
+                    if (walk->reg_spill_offs[r] == UINT_MAX)
+                        walk->reg_spill_offs[r] = offs;
                 } else {
                     walk->reg_spill_offs[r] = UINT_MAX;
                 }
