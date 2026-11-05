@@ -223,6 +223,9 @@ munmap_syscall(byte *addr, size_t len);
 
 /* in os.c */
 bool
+is_alone_in_secondary_thread_group(void);
+
+bool
 os_thread_take_over(priv_mcontext_t *mc, kernel_sigset_t *sigset);
 
 void *
