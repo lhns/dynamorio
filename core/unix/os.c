@@ -3665,6 +3665,33 @@ find_free_memory_in_region(byte *start, byte *end, size_t size,
     return found;
 }
 
+#if defined(LINUX) && defined(X86) && defined(X64)
+/* The kernel searches for MAP_32BIT only in [1G,2G) above a randomized floor, and
+ * for a low (non-PIE) app vmcode at -vm_base plus its jitter can cover all of it.
+ * The flag promises the low 2G, so after an ENOMEM we map at a free range there:
+ * a hint the kernel takes for MAP_32BIT.  Returns NULL on failure.
+ */
+static byte *
+app_mmap_32bit_retry(size_t len, uint prot, uint flags, reg_t fd, reg_t offs)
+{
+    byte *const window = (byte *)0x40000000, *const limit = (byte *)0x80000000;
+    size_t size = ALIGN_FORWARD(len, PAGE_SIZE);
+    byte *gap_end, *p;
+    if (size == 0 ||
+        (!find_free_memory_in_region(window, limit, size, NULL, &gap_end) &&
+         !find_free_memory_in_region(NULL, limit, size, NULL, &gap_end)))
+        return NULL;
+    p = mmap_syscall(gap_end - size, len, prot, flags, fd, offs);
+    if (!mmap_syscall_succeeded(p))
+        return NULL;
+    if (p + size > limit) { /* lost a race for the range */
+        munmap_syscall(p, size);
+        return NULL;
+    }
+    return p;
+}
+#endif
+
 void *
 os_heap_reserve_in_region(void *start, void *end, size_t size,
                           heap_error_code_t *error_code, bool executable)
@@ -9310,6 +9337,20 @@ post_system_call(dcontext_t *dcontext)
             ((app_pc)result < (app_pc)(ptr_int_t)-0x1000 && ALIGNED(base, PAGE_SIZE)));
 #else
         ASSERT_CURIOSITY(!success || ALIGNED(base, PAGE_SIZE));
+#endif
+#if defined(LINUX) && defined(X86) && defined(X64)
+        if (!success && result == -ENOMEM && TESTANY(MAP_32BIT, dcontext->sys_param3) &&
+            !TESTANY(MAP_FIXED | MAP_FIXED_NOREPLACE, dcontext->sys_param3)) {
+            byte *p = app_mmap_32bit_retry(
+                (size_t)dcontext->sys_param1, (uint)dcontext->sys_param2,
+                (uint)dcontext->sys_param3, sys_param(dcontext, 4),
+                sys_param(dcontext, 5));
+            if (p != NULL) {
+                set_success_return_val(dcontext, (reg_t)p);
+                base = p;
+                success = true;
+            }
+        }
 #endif
         if (!success)
             goto exit_post_system_call;
