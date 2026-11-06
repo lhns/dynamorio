@@ -71,21 +71,24 @@
  * expectations for the future - FIXME - */
 /* Ref case 3628, case 4397, empirically this only works for code where the
  * entire offset being written is within a cache line, so we can't use a locked
- * instruction to ensure atomicity.
- * Within a cache line was not enough on AMD EPYC 9V45: a thread executing a jmp while
- * another re-linked it jumped to a target that was neither the old nor the new one.
- * Naturally aligned offsets are written and fetched whole. */
+ * instruction to ensure atomicity */
 #define PAD_JMPS_ALIGNMENT                         \
+    (INTERNAL_OPTION(pad_jmps_set_alignment) != 0  \
+         ? INTERNAL_OPTION(pad_jmps_set_alignment) \
+         : proc_get_cache_line_size())
+/* Within a cache line was not enough for fragment exits on AMD EPYC 9V45: a thread
+ * executing an exit jmp while another re-linked it jumped to neither target.  Exit cti
+ * and stub offsets are naturally aligned instead.  Generated code keeps the cache line:
+ * aligning it too broke linux.syscall_pwait and client.annotation-concurrency.
+ */
+#define PAD_EXIT_CTI_ALIGNMENT                     \
     (INTERNAL_OPTION(pad_jmps_set_alignment) != 0  \
          ? INTERNAL_OPTION(pad_jmps_set_alignment) \
          : 4)
 #ifdef DEBUG
 #    define CHECK_JMP_TARGET_ALIGNMENT(target, size, hot_patch)                     \
         do {                                                                        \
-            /* Sites pad_jmps does not pad (coarse-grain entrance stubs) keep the old \
-             * within-a-cache-line guarantee only. */                               \
-            if (hot_patch &&                                                        \
-                CROSSES_ALIGNMENT(target, size, proc_get_cache_line_size())) {      \
+            if (hot_patch && CROSSES_ALIGNMENT(target, size, PAD_JMPS_ALIGNMENT)) { \
                 STATS_INC(unaligned_patches);                                       \
                 ASSERT(!DYNAMO_OPTION(pad_jmps));                                   \
             }                                                                       \
