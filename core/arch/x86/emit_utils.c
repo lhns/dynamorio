@@ -181,9 +181,9 @@ patchable_exit_cti_align_offs(dcontext_t *dcontext, instr_t *inst, cache_pc pc)
            instr_is_cti_short_rewrite(inst, NULL));
     IF_X64(ASSERT(CHECK_TRUNCATE_TYPE_uint(
         ALIGN_SHIFT_SIZE(pc + instr_length(dcontext, inst) - CTI_PATCH_SIZE,
-                         CTI_PATCH_SIZE, PAD_JMPS_ALIGNMENT))));
+                         CTI_PATCH_SIZE, PAD_EXIT_CTI_ALIGNMENT))));
     return (uint)ALIGN_SHIFT_SIZE(pc + instr_length(dcontext, inst) - CTI_PATCH_SIZE,
-                                  CTI_PATCH_SIZE, PAD_JMPS_ALIGNMENT);
+                                  CTI_PATCH_SIZE, PAD_EXIT_CTI_ALIGNMENT);
 }
 
 /* make sure to keep in sync w/ instr_raw_is_tls_spill() */

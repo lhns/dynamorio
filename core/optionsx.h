@@ -3147,10 +3147,12 @@ OPTION_DEFAULT(bool, pad_jmps, IF_X86_ELSE(true, false),
 #endif
 OPTION_DEFAULT_INTERNAL(bool, pad_jmps_return_excess_padding, true,
                         "if -pad_jmps returns any excess requested memory to fcache")
-OPTION_DEFAULT_INTERNAL(bool, pad_jmps_shift_bb, true,
+/* Off: a start shift aligns only the first exit, and PAD_EXIT_CTI_ALIGNMENT is too small
+ * for one shift to cover a bb's two exits, so every exit gets its own nop padding. */
+OPTION_DEFAULT_INTERNAL(bool, pad_jmps_shift_bb, false,
                         "if -pad_jmps shifts the start_pc for padding the first jmp of a "
                         "bb instead of inserting a nop")
-OPTION_DEFAULT_INTERNAL(bool, pad_jmps_shift_trace, true,
+OPTION_DEFAULT_INTERNAL(bool, pad_jmps_shift_trace, false,
                         "if -pad_jmps shifts the start_pc for padding the first jmp of a "
                         "trace instead of inserting a nop")
 OPTION_DEFAULT_INTERNAL(
