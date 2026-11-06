@@ -78,13 +78,14 @@
          : proc_get_cache_line_size())
 /* Within a cache line was not enough on AMD EPYC 9V45: a thread executing a fragment's
  * exit jmp while another re-linked it jumped to neither the old nor the new target.
- * Exit cti and stub offsets are padded to natural alignment, which also keeps them
- * within a cache line.
+ * Exit cti and stub offsets are kept within 16 bytes instead, which also keeps them
+ * within a cache line; it is the smallest unit in which one start shift still covers
+ * both exits of a bb (pad_jmps_shift_bb).
  */
 #define PAD_EXIT_CTI_ALIGNMENT                     \
     (INTERNAL_OPTION(pad_jmps_set_alignment) != 0  \
          ? INTERNAL_OPTION(pad_jmps_set_alignment) \
-         : 4)
+         : 16)
 #ifdef DEBUG
 #    define CHECK_JMP_TARGET_ALIGNMENT(target, size, hot_patch)                     \
         do {                                                                        \

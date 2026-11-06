@@ -396,7 +396,7 @@ nop_pad_ilist(dcontext_t *dcontext, fragment_t *f, instrlist_t *ilist, bool emit
                      * they are less then a cache line apart) */
                     if (PAD_JMPS_SHIFT_START(f->flags) &&
                         offset + instr_length(dcontext, inst) - first_patch_offset <
-                            PAD_JMPS_ALIGNMENT) {
+                            PAD_EXIT_CTI_ALIGNMENT) {
                         ASSERT(start_shift == 0); /* should only shift once */
                         start_shift = nop_length;
                         /* adjust the starting_pc, all previously checked
