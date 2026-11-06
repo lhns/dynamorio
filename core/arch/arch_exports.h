@@ -1120,7 +1120,7 @@ fill_with_nops(dr_isa_mode_t isa_mode, byte *addr, size_t size);
 /****************************************************************************/
 
 /* evaluates to true if region crosses at most 1 padding boundary */
-#define WITHIN_PAD_REGION(lower, upper) ((upper) - (lower) <= PAD_JMPS_ALIGNMENT)
+#define WITHIN_PAD_REGION(lower, upper) ((upper) - (lower) <= PAD_EXIT_CTI_ALIGNMENT)
 
 #define STATS_PAD_JMPS_ADD(flags, stat, val)                  \
     DOSTATS({                                                 \
