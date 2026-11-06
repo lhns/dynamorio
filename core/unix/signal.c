@@ -6160,10 +6160,19 @@ main_signal_handler_C(byte *xsp)
             fragment_t xw; fragment_t *xfr = fragment_pclookup(dcontext, pc, &xw);
             fcache_pc_state((cache_pc)pc);
             {
-                byte *xc = (byte *)pc;
-                print_file(STDERR, "@@B %02x %02x %02x %02x %02x %02x %02x %02x tid=%d next_tag=%p last_exit=%p at_syscall=%d\n",
-                           xc[0], xc[1], xc[2], xc[3], xc[4], xc[5], xc[6], xc[7], d_r_get_thread_id(), dcontext->next_tag,
-                           dcontext->last_exit, get_at_syscall(dcontext));
+                byte xc[8] = { 0 };
+                reg_t xs4[6] = { 0 };
+                bool rd = d_r_safe_read(pc, sizeof(xc), xc);
+                bool rs = d_r_safe_read((void *)sc->SC_XSP, sizeof(xs4), xs4);
+                print_file(STDERR, "@@B rd=%d %02x %02x %02x %02x %02x %02x %02x %02x tid=%d next_tag=%p last_exit=%p lflags=%x last_frag=%p at_syscall=%d\n",
+                           rd, xc[0], xc[1], xc[2], xc[3], xc[4], xc[5], xc[6], xc[7], d_r_get_thread_id(), dcontext->next_tag,
+                           dcontext->last_exit, dcontext->last_exit == NULL ? 0 : dcontext->last_exit->flags,
+                           dcontext->last_fragment, get_at_syscall(dcontext));
+                print_file(STDERR, "@@R rax=%p rbx=%p rcx=%p rdx=%p rsi=%p rdi=%p rbp=%p rsp=%p r8=%p r9=%p r10=%p r11=%p r12=%p r13=%p r14=%p r15=%p\n",
+                           sc->SC_XAX, sc->SC_XBX, sc->SC_XCX, sc->SC_XDX, sc->SC_XSI, sc->SC_XDI, sc->SC_XBP, sc->SC_XSP,
+                           sc->SC_R8, sc->SC_R9, sc->SC_R10, sc->SC_R11, sc->SC_R12, sc->SC_R13, sc->SC_R14, sc->SC_R15);
+                print_file(STDERR, "@@K rs=%d stack %p %p %p %p %p %p gen=%d ibl=%d\n", rs, xs4[0], xs4[1], xs4[2], xs4[3], xs4[4],
+                           xs4[5], in_generated_routine(dcontext, pc), in_indirect_branch_lookup_code(dcontext, pc));
             }
             print_file(STDERR, "@@X sig=%d pc=%p target=%p write=%d syscall=%d si_addr=%p si_code=%d area=%d vm=%x frag=%x mem=%d base=%p size=%x prot=%x f=%p tag=%p fflags=%x where=%d last=%p\n",
                        sig, pc, target, is_write, syscall_signal, siginfo->si_addr, siginfo->si_code, xfound, xf, xr, xm, xb, (uint)xs, xp, xfr,
