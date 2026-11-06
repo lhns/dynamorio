@@ -4540,8 +4540,11 @@ unlink_fragment_for_signal(dcontext_t *dcontext, fragment_t *f,
     bool changed = false;
     bool track = waiter != NULL && TESTANY(FRAG_SHARED, f->flags);
     bool waslinking = is_couldbelinking(dcontext);
-    if (!waslinking)
+    if (!waslinking) {
+        /* We are interrupting f, or fcache_enter about to enter it (i#2019). */
+        fragment_defer_flush_check(dcontext, true);
         enter_couldbelinking(dcontext, NULL, false);
+    }
     /* may not be linked if trace_relink or something */
     if (TESTANY(FRAG_COARSE_GRAIN, f->flags)) {
         /* XXX PR 213040: we don't support unlinking coarse, so we try
@@ -4589,8 +4592,10 @@ unlink_fragment_for_signal(dcontext_t *dcontext, fragment_t *f,
         if (mangle_syscall_code(dcontext, f, pc, false /*do not skip exit cti*/))
             changed = true;
     }
-    if (!waslinking)
+    if (!waslinking) {
         enter_nolinking(dcontext, NULL, false);
+        fragment_defer_flush_check(dcontext, false);
+    }
     return changed;
 }
 

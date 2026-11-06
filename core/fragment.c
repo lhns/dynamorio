@@ -2022,6 +2022,7 @@ fragment_thread_init(dcontext_t *dcontext)
     ASSIGN_INIT_LOCK_FREE(pt->fragment_delete_mutex, fragment_delete_mutex);
 
     pt->could_be_linking = false;
+    pt->defer_flush_check = false;
     pt->wait_for_unlink = false;
     pt->about_to_exit = false;
     pt->flush_queue_nonempty = false;
@@ -5375,6 +5376,12 @@ study_all_hashtables(dcontext_t *dcontext)
  * deletion.
  */
 
+void
+fragment_defer_flush_check(dcontext_t *dcontext, bool defer)
+{
+    ((per_thread_t *)dcontext->fragment_field)->defer_flush_check = defer;
+}
+
 uint
 get_flushtime_last_update(dcontext_t *dcontext)
 {
@@ -5414,6 +5421,11 @@ check_flush_queue(dcontext_t *dcontext, fragment_t *was_I_flushed)
     per_thread_t *pt = (per_thread_t *)dcontext->fragment_field;
     bool not_flushed = true;
     ASSERT_OWN_MUTEX(true, &pt->linking_lock);
+    /* A walk now could free the fragment this thread is executing or about to enter
+     * from fcache_enter, as its own reference would be the one dropped.
+     */
+    if (pt->defer_flush_check)
+        return true;
     /* first check private queue and act on pending deletions */
     if (pt->flush_queue_nonempty) {
         bool local_prot = local_heap_protected(dcontext);

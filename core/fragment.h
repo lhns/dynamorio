@@ -539,6 +539,10 @@ typedef struct _per_thread_t {
      * not used while not flushing.
      */
     bool at_syscall_at_flush;
+    /* Set while this thread changes linking state from inside the cache (a signal
+     * handler): its synch points must not drop its claim on fragments it is in.
+     */
+    bool defer_flush_check;
 } per_thread_t;
 
 #define FCACHE_ENTRY_PC(f) (f->start_pc + f->prefix_size)
@@ -1032,6 +1036,9 @@ enter_couldbelinking(dcontext_t *dcontext, fragment_t *watch, bool temporary);
 
 void
 enter_threadexit(dcontext_t *dcontext);
+
+void
+fragment_defer_flush_check(dcontext_t *dcontext, bool defer);
 
 uint
 get_flushtime_last_update(dcontext_t *dcontext);
