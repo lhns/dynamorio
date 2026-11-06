@@ -3154,7 +3154,7 @@ OPTION_DEFAULT_INTERNAL(bool, pad_jmps_shift_trace, true,
                         "if -pad_jmps shifts the start_pc for padding the first jmp of a "
                         "trace instead of inserting a nop")
 OPTION_DEFAULT_INTERNAL(
-    uint, pad_jmps_set_alignment, 0,
+    uint, pad_jmps_set_alignment, 4,
     "if non-zero sets the pad_jmps alignment (useful for stress testing -pad_jmps code)")
 
 OPTION_DEFAULT_INTERNAL(bool, ibl_sentinel_check,
