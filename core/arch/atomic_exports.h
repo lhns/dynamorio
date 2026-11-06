@@ -71,11 +71,14 @@
  * expectations for the future - FIXME - */
 /* Ref case 3628, case 4397, empirically this only works for code where the
  * entire offset being written is within a cache line, so we can't use a locked
- * instruction to ensure atomicity */
+ * instruction to ensure atomicity.
+ * Within a cache line was not enough on AMD EPYC 9V45: a thread executing a jmp while
+ * another re-linked it jumped to a target that was neither the old nor the new one.
+ * Naturally aligned offsets are written and fetched whole. */
 #define PAD_JMPS_ALIGNMENT                         \
     (INTERNAL_OPTION(pad_jmps_set_alignment) != 0  \
          ? INTERNAL_OPTION(pad_jmps_set_alignment) \
-         : proc_get_cache_line_size())
+         : 4)
 #ifdef DEBUG
 #    define CHECK_JMP_TARGET_ALIGNMENT(target, size, hot_patch)                     \
         do {                                                                        \
