@@ -82,7 +82,10 @@
 #ifdef DEBUG
 #    define CHECK_JMP_TARGET_ALIGNMENT(target, size, hot_patch)                     \
         do {                                                                        \
-            if (hot_patch && CROSSES_ALIGNMENT(target, size, PAD_JMPS_ALIGNMENT)) { \
+            /* Sites pad_jmps does not pad (coarse-grain entrance stubs) keep the old \
+             * within-a-cache-line guarantee only. */                               \
+            if (hot_patch &&                                                        \
+                CROSSES_ALIGNMENT(target, size, proc_get_cache_line_size())) {      \
                 STATS_INC(unaligned_patches);                                       \
                 ASSERT(!DYNAMO_OPTION(pad_jmps));                                   \
             }                                                                       \
