@@ -1178,6 +1178,29 @@ fcache_pc_state(cache_pc lookup_pc)
 }
 
 volatile int diag_deleter;
+diag_free_t diag_frees[DIAG_FREES];
+volatile uint diag_free_idx;
+
+void
+diag_check_entry(dcontext_t *dcontext, fragment_t *f, uint walked, int where)
+{
+    fragment_t *occ;
+    uint i;
+    if (TEST(FRAG_COARSE_GRAIN, f->flags))
+        return;
+    occ = *(fragment_t **)FRAG_HDR_START(f);
+    if (occ == f && !TEST(FRAG_WAS_DELETED, f->flags))
+        return;
+    print_file(STDERR, "@@E stale entry where=%d f=%p tag=%p start=%p flags=%x occ=%p tid=%d walked=%u now=%u global=%u last_exit=%p\n",
+               where, f, f->tag, f->start_pc, f->flags, occ, d_r_get_thread_id(), walked,
+               get_flushtime_last_update(dcontext), flushtime_global, dcontext->last_exit);
+    for (i = 0; i < DIAG_FREES; i++) {
+        diag_free_t *d = &diag_frees[i];
+        if (d->f == f || d->start == f->start_pc || d->tag == f->tag)
+            print_file(STDERR, "@@E freed slot=%u f=%p tag=%p start=%p deleter=%d tid=%d global=%u (idx now %u)\n", i, d->f,
+                       d->tag, d->start, d->deleter, d->tid, d->flushtime, diag_free_idx);
+    }
+}
 
 fragment_t *
 fcache_fragment_pclookup(dcontext_t *dcontext, cache_pc lookup_pc, fragment_t *wrapper)
@@ -3744,6 +3767,15 @@ fcache_remove_fragment(dcontext_t *dcontext, fragment_t *f)
     ASSERT(dcontext != GLOBAL_DCONTEXT || dynamo_exited || dynamo_resetting ||
            TEST(FRAG_WAS_DELETED, f->flags) || is_self_allsynch_flushing());
     PROTECT_CACHE(cache, lock);
+    {
+        uint di = __sync_fetch_and_add(&diag_free_idx, 1) % DIAG_FREES;
+        diag_frees[di].f = f;
+        diag_frees[di].tag = f->tag;
+        diag_frees[di].start = f->start_pc;
+        diag_frees[di].deleter = diag_deleter;
+        diag_frees[di].tid = d_r_get_thread_id();
+        diag_frees[di].flushtime = flushtime_global;
+    }
     {
         fragment_t *occ = *(fragment_t **)FRAG_HDR_START(f);
         if (occ != f) {

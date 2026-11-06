@@ -168,6 +168,10 @@ fragment_lookup_deleted(dcontext_t *dcontext, app_pc tag);
 void
 fcache_pc_state(cache_pc lookup_pc);
 extern volatile int diag_deleter;
+#define DIAG_FREES 512
+typedef struct { fragment_t *f; app_pc tag; cache_pc start; int deleter; int tid; uint flushtime; } diag_free_t;
+void
+diag_check_entry(dcontext_t *dcontext, fragment_t *f, uint walked, int where);
 
 fragment_t *
 fcache_fragment_pclookup(dcontext_t *dcontext, cache_pc lookup_pc, fragment_t *wrapper);

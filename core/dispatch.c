@@ -484,6 +484,7 @@ dispatch_enter_fcache(dcontext_t *dcontext, fragment_t *targetf)
                IF_X64(||
                       (dr_get_isa_mode(dcontext) == DR_ISA_IA32 &&
                        !FRAG_IS_32(targetf->flags) && DYNAMO_OPTION(x86_to_x64))));
+    diag_check_entry(dcontext, targetf, 0, 1);
     if (TEST(FRAG_SHARED, targetf->flags))
         fcache_enter = get_fcache_enter_shared_routine(dcontext);
     else
