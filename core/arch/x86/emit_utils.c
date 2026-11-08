@@ -170,7 +170,8 @@ patch_branch(dr_isa_mode_t isa_mode, cache_pc branch_pc, cache_pc target_pc,
  * properly aligned returns 0, else returns the number of bytes it would
  * need to be forward shifted to be properly aligned */
 uint
-patchable_exit_cti_align_offs(dcontext_t *dcontext, instr_t *inst, cache_pc pc)
+patchable_exit_cti_align_offs(dcontext_t *dcontext, instr_t *inst, cache_pc pc,
+                              uint frag_flags)
 {
     /* all our exit cti's currently use 4 byte offsets */
     /* FIXME : would be better to use a instr_is_cti_long or some such
@@ -181,9 +182,9 @@ patchable_exit_cti_align_offs(dcontext_t *dcontext, instr_t *inst, cache_pc pc)
            instr_is_cti_short_rewrite(inst, NULL));
     IF_X64(ASSERT(CHECK_TRUNCATE_TYPE_uint(
         ALIGN_SHIFT_SIZE(pc + instr_length(dcontext, inst) - CTI_PATCH_SIZE,
-                         CTI_PATCH_SIZE, PAD_JMPS_ALIGNMENT))));
+                         CTI_PATCH_SIZE, PAD_EXIT_CTI_ALIGNMENT(frag_flags)))));
     return (uint)ALIGN_SHIFT_SIZE(pc + instr_length(dcontext, inst) - CTI_PATCH_SIZE,
-                                  CTI_PATCH_SIZE, PAD_JMPS_ALIGNMENT);
+                                  CTI_PATCH_SIZE, PAD_EXIT_CTI_ALIGNMENT(frag_flags));
 }
 
 /* make sure to keep in sync w/ instr_raw_is_tls_spill() */
@@ -382,7 +383,8 @@ nop_pad_ilist(dcontext_t *dcontext, fragment_t *f, instrlist_t *ilist, bool emit
                  * the current instr.
                  */
                 uint nop_length =
-                    patchable_exit_cti_align_offs(dcontext, inst, starting_pc + offset);
+                    patchable_exit_cti_align_offs(dcontext, inst, starting_pc + offset,
+                                                  f->flags);
                 LOG(THREAD, LOG_INTERP, 4, "%s: F%d @" PFX " cti shift needed: %d\n",
                     __FUNCTION__, f->id, starting_pc + offset, nop_length);
                 if (first_patch_offset < 0)
@@ -396,7 +398,7 @@ nop_pad_ilist(dcontext_t *dcontext, fragment_t *f, instrlist_t *ilist, bool emit
                      * they are less then a cache line apart) */
                     if (PAD_JMPS_SHIFT_START(f->flags) &&
                         offset + instr_length(dcontext, inst) - first_patch_offset <
-                            PAD_JMPS_ALIGNMENT) {
+                            PAD_EXIT_CTI_ALIGNMENT(f->flags)) {
                         ASSERT(start_shift == 0); /* should only shift once */
                         start_shift = nop_length;
                         /* adjust the starting_pc, all previously checked
@@ -431,8 +433,8 @@ nop_pad_ilist(dcontext_t *dcontext, fragment_t *f, instrlist_t *ilist, bool emit
                         offset += nop_length;
                     }
                     /* sanity check that we fixed the alignment */
-                    ASSERT(patchable_exit_cti_align_offs(dcontext, inst,
-                                                         starting_pc + offset) == 0);
+                    ASSERT(patchable_exit_cti_align_offs(dcontext, inst, starting_pc + offset,
+                                                         f->flags) == 0);
                 } else {
                     DOSTATS({
                         /* only inc stats for emitting, not for recreating */

@@ -374,7 +374,7 @@ patch_branch(dr_isa_mode_t isa_mode, cache_pc branch_pc, cache_pc target_pc,
 }
 
 uint
-patchable_exit_cti_align_offs(dcontext_t *dcontext, instr_t *inst, cache_pc pc)
+patchable_exit_cti_align_offs(dcontext_t *dcontext, instr_t *inst, cache_pc pc, uint frag_flags)
 {
     return 0; /* always aligned */
 }

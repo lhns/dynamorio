@@ -76,6 +76,17 @@
     (INTERNAL_OPTION(pad_jmps_set_alignment) != 0  \
          ? INTERNAL_OPTION(pad_jmps_set_alignment) \
          : proc_get_cache_line_size())
+/* Within a cache line was not enough on AMD EPYC 9V45: a thread executing a trace's exit
+ * jmp while another thread re-linked it jumped to neither the old nor the new target.
+ * Trace exits are padded to natural alignment (traces may hold nops).  Bbs keep the cache
+ * line: their exits are aligned by one start shift, and code that decodes bbs relies on
+ * them holding no nops.
+ */
+#define PAD_EXIT_CTI_ALIGNMENT(frag_flags)                               \
+    ((INTERNAL_OPTION(pad_jmps_set_alignment) == 0 &&                    \
+      TEST(FRAG_IS_TRACE, (frag_flags)))                                 \
+         ? 4                                                             \
+         : PAD_JMPS_ALIGNMENT)
 #ifdef DEBUG
 #    define CHECK_JMP_TARGET_ALIGNMENT(target, size, hot_patch)                     \
         do {                                                                        \
