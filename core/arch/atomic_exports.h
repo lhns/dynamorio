@@ -87,6 +87,9 @@
       TEST(FRAG_IS_TRACE, (frag_flags)))                                 \
          ? 4                                                             \
          : PAD_JMPS_ALIGNMENT)
+/* Exit stub patch sites are outside the fragment body, so they are aligned for bbs too. */
+#define PAD_STUB_ALIGNMENT \
+    (INTERNAL_OPTION(pad_jmps_set_alignment) != 0 ? INTERNAL_OPTION(pad_jmps_set_alignment) : 4)
 #ifdef DEBUG
 #    define CHECK_JMP_TARGET_ALIGNMENT(target, size, hot_patch)                     \
         do {                                                                        \
