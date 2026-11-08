@@ -1119,6 +1119,9 @@ fill_with_nops(dr_isa_mode_t isa_mode, byte *addr, size_t size);
 #endif /* RISCV64 */
 /****************************************************************************/
 
+/* fcache_shift_start_pc() can shift a fragment's start by at most this minus one. */
+#define START_PC_MAX_SHIFT 4
+
 /* evaluates to true if region crosses at most 1 padding boundary */
 #define WITHIN_PAD_REGION(lower, upper, frag_flags) \
     ((upper) - (lower) <= PAD_EXIT_CTI_ALIGNMENT(frag_flags))
