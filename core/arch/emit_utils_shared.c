@@ -280,7 +280,7 @@ bytes_for_exitstub_alignment(dcontext_t *dcontext, linkstub_t *l, fragment_t *f,
             startpc +
                 exit_stub_size(dcontext, EXIT_TARGET_TAG(dcontext, f, l), f->flags) -
                 EXIT_STUB_PATCH_OFFSET,
-            EXIT_STUB_PATCH_SIZE, PAD_JMPS_ALIGNMENT);
+            EXIT_STUB_PATCH_SIZE, PAD_STUB_ALIGNMENT);
         IF_X64(ASSERT(CHECK_TRUNCATE_TYPE_uint(shift)));
         return (uint)shift;
     }

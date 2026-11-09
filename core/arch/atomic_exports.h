@@ -76,6 +76,20 @@
     (INTERNAL_OPTION(pad_jmps_set_alignment) != 0  \
          ? INTERNAL_OPTION(pad_jmps_set_alignment) \
          : proc_get_cache_line_size())
+/* Exit offsets that threads may run while another re-links them.  Within a cache line is
+ * not enough on AMD EPYC 9V45 (see bb_exit_shift()).  Trace exits and stubs can hold nops,
+ * so they are naturally aligned; bbs keep the cache line here and are aligned by their
+ * start shift.
+ */
+#define PAD_EXIT_CTI_ALIGNMENT(frag_flags)            \
+    ((INTERNAL_OPTION(pad_jmps_set_alignment) == 0 && \
+      TESTANY(FRAG_IS_TRACE, (frag_flags)))           \
+         ? 4                                          \
+         : PAD_JMPS_ALIGNMENT)
+#define PAD_STUB_ALIGNMENT                         \
+    (INTERNAL_OPTION(pad_jmps_set_alignment) != 0  \
+         ? INTERNAL_OPTION(pad_jmps_set_alignment) \
+         : 4)
 #ifdef DEBUG
 #    define CHECK_JMP_TARGET_ALIGNMENT(target, size, hot_patch)                     \
         do {                                                                        \

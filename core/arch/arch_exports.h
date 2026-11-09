@@ -1159,8 +1159,12 @@ fill_with_nops(dr_isa_mode_t isa_mode, byte *addr, size_t size);
 #endif /* RISCV64 */
 /****************************************************************************/
 
+/* fcache_shift_start_pc() can shift a fragment's start by at most this minus one. */
+#define START_PC_MAX_SHIFT 4
+
 /* evaluates to true if region crosses at most 1 padding boundary */
-#define WITHIN_PAD_REGION(lower, upper) ((upper) - (lower) <= PAD_JMPS_ALIGNMENT)
+#define WITHIN_PAD_REGION(lower, upper, frag_flags) \
+    ((upper) - (lower) <= PAD_EXIT_CTI_ALIGNMENT(frag_flags))
 
 #define STATS_PAD_JMPS_ADD(flags, stat, val)                  \
     DOSTATS({                                                 \
@@ -1184,7 +1188,8 @@ uint
 extend_trace_pad_bytes(fragment_t *add_frag);
 
 uint
-patchable_exit_cti_align_offs(dcontext_t *dcontext, instr_t *inst, cache_pc pc);
+patchable_exit_cti_align_offs(dcontext_t *dcontext, instr_t *inst, cache_pc pc,
+                              uint frag_flags);
 
 bool
 is_patchable_exit_stub(dcontext_t *dcontext, linkstub_t *l, fragment_t *f);
