@@ -209,7 +209,8 @@ set_linkstub_fields(dcontext_t *dcontext, fragment_t *f, instrlist_t *ilist,
 
             DODEBUG({
                 if (emit && is_exit_cti_patchable(dcontext, inst, f->flags)) {
-                    uint off = patchable_exit_cti_align_offs(dcontext, inst, pc);
+                    uint off =
+                        patchable_exit_cti_align_offs(dcontext, inst, pc, f->flags);
                     if (off > 0) {
                         ASSERT(!PAD_FRAGMENT_JMPS(f->flags));
                         STATS_PAD_JMPS_ADD(f->flags, unaligned_exits, 1);
@@ -463,7 +464,7 @@ emit_fragment_common(dcontext_t *dcontext, app_pc tag, instrlist_t *ilist, uint 
                  */
                 if (is_exit_cti_patchable(dcontext, inst, flags)) {
                     if (last_pad_offset == 0 ||
-                        !WITHIN_PAD_REGION(last_pad_offset, offset)) {
+                        !WITHIN_PAD_REGION(last_pad_offset, offset, flags)) {
                         last_pad_offset = offset - CTI_PATCH_OFFSET;
                         extra_jmp_padding_body += MAX_PAD_SIZE;
                     }
