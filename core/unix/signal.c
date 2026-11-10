@@ -211,6 +211,8 @@ typedef struct _clone_record_t {
      * post-syscall in the child thread.
      */
     clone3_syscall_args_t *app_clone_args;
+    /* For a vfork child: the parent's claim on the uninit_thread_count it took. */
+    volatile int *vfork_counted;
 #else
     uint clone_flags;
 #endif
@@ -861,6 +863,7 @@ create_clone_record(dcontext_t *dcontext, reg_t *app_thread_xsp)
     record->info.app_sigstack.ss_flags = SS_DISABLE;
     record->parent_info = (thread_sig_info_t *)dcontext->signal_field;
     record->pcprofile_info = dcontext->pcprofile_field;
+    IF_LINUX(record->vfork_counted = NULL);
 #if defined(AARCHXX) || defined(RISCV64)
     record->app_stolen_value = get_stolen_reg_val(get_mcontext(dcontext));
 #    ifdef ARM
@@ -904,6 +907,20 @@ create_clone_record(dcontext_t *dcontext, reg_t *app_thread_xsp)
 #endif
     return (void *)record;
 }
+
+#ifdef LINUX
+volatile int *
+get_clone_record_vfork_counted(void *record)
+{
+    return ((clone_record_t *)record)->vfork_counted;
+}
+
+void
+set_clone_record_vfork_counted(void *record, volatile int *claim)
+{
+    ((clone_record_t *)record)->vfork_counted = claim;
+}
+#endif
 
 /* This is to support dr_create_client_thread() */
 void
@@ -6968,18 +6985,20 @@ terminate_via_kill(dcontext_t *dcontext)
      */
     memset(&info->app_sigblocked, 0, sizeof(info->app_sigblocked));
 
-    /* FIXME PR 541760: there can be multiple thread groups and thus
-     * this may not exit all threads in the address space.  A thread alone in its group
-     * exits alone: a process exit would wait for its vfork parent, which the kernel
-     * holds until this thread is gone.
+    /* PR 541760: there can be multiple thread groups, as with vfork, and the signal
+     * ends only ours.  A process exit would also wait for a vfork parent, which the
+     * kernel holds until a vfork child is gone.
      */
+    bool exit_process = is_last_thread_group();
+    if (!exit_process)
+        exit_other_threads_in_group(false /*no valid mcontext*/);
     block_cleanup_and_terminate(
         dcontext, SYS_kill,
         /* Pass -pid in case main thread has exited
          * in which case will get -ESRCH
          */
         IF_VMX86(os_in_vmkernel_userworld() ? -(int)get_process_id() :) get_process_id(),
-        dcontext->sys_param0, !is_alone_in_secondary_thread_group(), 0, 0);
+        dcontext->sys_param0, exit_process, 0, 0);
     ASSERT_NOT_REACHED();
 }
 
@@ -7189,7 +7208,7 @@ execute_default_action(dcontext_t *dcontext, int sig, sigframe_rt_t *frame,
                  */
                 KSTOP_REWIND_UNTIL(thread_measured);
                 /* No process exit, so no re-execution: see terminate_via_kill(). */
-                if (is_alone_in_secondary_thread_group())
+                if (!is_last_thread_group())
                     terminate_via_kill_from_anywhere(dcontext, sig);
                 /* We are on the sigstack now, so assign it to NULL to avoid being
                  * freed during process exit cleanup

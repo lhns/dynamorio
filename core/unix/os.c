@@ -2867,6 +2867,33 @@ os_new_thread_pre(void)
     ATOMIC_INC(int, uninit_thread_count);
 }
 
+/* Drops the uninit_thread_count os_new_thread_pre() took for this new thread.  A vfork
+ * child can be killed before it gets here, so its parent drops it then
+ * (cleanup_after_vfork_child_death()); whoever clears the claim drops the count.
+ */
+void
+os_new_thread_counted(void *clone_record)
+{
+#ifdef LINUX
+    volatile int *claim = get_clone_record_vfork_counted(clone_record);
+    if (claim != NULL && atomic_exchange_int(claim, 0) == 0)
+        return;
+#endif
+    ASSERT(uninit_thread_count > 0);
+    ATOMIC_DEC(int, uninit_thread_count);
+}
+
+#ifdef LINUX
+/* A vfork child and its parent share the claim on the uninit_thread_count taken for it. */
+static void
+vfork_child_claim(dcontext_t *dcontext, void *clone_record)
+{
+    os_thread_data_t *ostd = (os_thread_data_t *)dcontext->os_field;
+    ostd->vfork_child_counted = 1;
+    set_clone_record_vfork_counted(clone_record, &ostd->vfork_child_counted);
+}
+#endif
+
 /* This is called from pre_system_call() and before cloning a client thread in
  * dr_create_client_thread. Hence os_clone_pre is used for app threads as well
  * as client threads. Do not add anything that we do not want to happen while
@@ -3971,6 +3998,59 @@ os_thread_terminate(thread_record_t *tr)
      * another signal than to resume it.
      */
     return send_suspend_signal(tr, tr->pid, tr->id);
+}
+
+#ifdef LINUX
+/* True if tid of pid is blocked in the kernel in a vfork-like syscall, rather than in DR
+ * code on either side of it.  A non-dumpable process cannot read that file; then the caller's
+ * mark has to do, and a thread about to enter the syscall is taken as in it.  It starts its
+ * child as the process ends, like any thread that creates one after the exit's check.
+ */
+static bool
+thread_in_vfork_syscall(process_id_t pid, thread_id_t tid)
+{
+    char path[64], buf[32];
+    int nr;
+    ssize_t len;
+    file_t f;
+    snprintf(path, BUFFER_SIZE_ELEMENTS(path), "/proc/%d/task/%d/syscall", pid, tid);
+    NULL_TERMINATE_BUFFER(path);
+    f = os_open(path, OS_OPEN_READ);
+    if (f == INVALID_FILE)
+        return true;
+    len = os_read(f, buf, sizeof(buf) - 1);
+    os_close(f);
+    if (len <= 0)
+        return false;
+    buf[len] = '\0';
+    if (d_r_sscanf(buf, "%d", &nr) != 1)
+        return false;
+    if (nr == SYS_clone || nr == SYS_clone3)
+        return true;
+#    ifdef SYS_vfork
+    return nr == SYS_vfork;
+#    else
+    return false;
+#    endif
+}
+#endif
+
+/* A thread waiting in vfork cannot take a suspend signal until its child execs or exits,
+ * which need not happen before the process is gone.  For a synch that ends the process,
+ * claims such a thread so it never runs on: the kernel kills it with the group, and if the
+ * child lets it go first it exits (vfork_wait_end()).
+ */
+bool
+os_thread_abandon_in_vfork(thread_record_t *tr)
+{
+#ifdef LINUX
+    os_thread_data_t *ostd = (os_thread_data_t *)tr->dcontext->os_field;
+    if (ostd->vfork_wait != VFORK_WAITING || !thread_in_vfork_syscall(tr->pid, tr->id))
+        return false;
+    return atomic_compare_exchange_int(&ostd->vfork_wait, VFORK_WAITING, VFORK_ABANDONED);
+#else
+    return false;
+#endif
 }
 
 bool
@@ -5760,6 +5840,39 @@ get_stored_clone3_flags(dcontext_t *dcontext)
 {
     return ((uint64)dcontext->sys_param4 << 32) | dcontext->sys_param3;
 }
+
+/* Marks a vfork-like syscall about to run, for os_thread_abandon_in_vfork(). */
+static void
+vfork_wait_begin(dcontext_t *dcontext)
+{
+    uint64 flags;
+    if (dcontext->sys_num == SYS_clone)
+        flags = dcontext->sys_param0;
+    else if (dcontext->sys_num == SYS_clone3)
+        flags = get_stored_clone3_flags(dcontext);
+#    ifdef SYS_vfork
+    else if (dcontext->sys_num == SYS_vfork)
+        flags = CLONE_VFORK;
+#    endif
+    else
+        return;
+    if (TEST(CLONE_VFORK, flags))
+        ((os_thread_data_t *)dcontext->os_field)->vfork_wait = VFORK_WAITING;
+}
+
+/* A process exit abandoned this thread in vfork, and its child has let it go before the
+ * kernel killed it: it must not run on, as DR may be gone.
+ */
+static void
+vfork_wait_end(dcontext_t *dcontext)
+{
+    os_thread_data_t *ostd = (os_thread_data_t *)dcontext->os_field;
+    if (ostd->vfork_wait != 0 &&
+        !atomic_compare_exchange_int(&ostd->vfork_wait, VFORK_WAITING, 0)) {
+        dynamorio_syscall(SYS_exit, 1, 0);
+        ASSERT_NOT_REACHED();
+    }
+}
 #endif
 
 bool
@@ -6471,13 +6584,20 @@ cleanup_after_vfork_execve(dcontext_t *dcontext)
 }
 
 /* A vfork has returned, so its child has exec'ed, exited or died.  One that a signal
- * killed ran no exit path, and its stale record would hang the next synch.
- * Not handled: a child killed holding a DR lock or before dynamo_thread_init().
+ * killed ran no exit path, and its stale record would hang the next synch; one killed
+ * before dynamo_thread_init() left the uninit_thread_count taken for it, which every
+ * later synch_with_all_threads() would wait on.
+ * Not handled: a child killed holding a DR lock.
  */
 static void
 cleanup_after_vfork_child_death(dcontext_t *dcontext, ptr_int_t child)
 {
     thread_record_t *tr;
+    os_thread_data_t *ostd = (os_thread_data_t *)dcontext->os_field;
+    if (atomic_exchange_int(&ostd->vfork_child_counted, 0) == 1) {
+        ASSERT(uninit_thread_count > 0);
+        ATOMIC_DEC(int, uninit_thread_count);
+    }
     if (child <= 0)
         return;
     d_r_mutex_lock(&thread_initexit_lock);
@@ -6490,31 +6610,66 @@ cleanup_after_vfork_child_death(dcontext_t *dcontext, ptr_int_t child)
     d_r_mutex_unlock(&thread_initexit_lock);
 }
 
-/* True if this thread is alone in its thread group while other groups share the address
- * space, as a vfork child is.
+/* True unless another thread group shares the address space, as a vfork child does.  Ending
+ * our group then must not end theirs.  Xref i#94, PR 541760.
  */
 bool
-is_alone_in_secondary_thread_group(void)
+is_last_thread_group(void)
+{
+    process_id_t mypid = get_process_id();
+    thread_record_t **threads;
+    int num_threads, i;
+    bool last = true;
+    d_r_mutex_lock(&thread_initexit_lock);
+    get_list_of_threads(&threads, &num_threads);
+    for (i = 0; i < num_threads; i++) {
+        if (threads[i]->pid != mypid && !IS_CLIENT_THREAD(threads[i]->dcontext)) {
+            last = false;
+            break;
+        }
+    }
+    d_r_mutex_unlock(&thread_initexit_lock);
+    global_heap_free(threads,
+                     num_threads * sizeof(thread_record_t *) HEAPACCT(ACCT_THREAD_MGT));
+    return last;
+}
+
+/* Terminates and cleans up the other threads of our group, for a group exit that leaves
+ * DR running for another group.
+ */
+void
+exit_other_threads_in_group(bool valid_mcontext)
 {
     process_id_t mypid = get_process_id();
     thread_id_t myid = d_r_get_thread_id();
     thread_record_t **threads;
     int num_threads, i;
-    bool others = false, alone = true;
+    DEBUG_DECLARE(thread_synch_result_t synch_res;)
     d_r_mutex_lock(&thread_initexit_lock);
     get_list_of_threads(&threads, &num_threads);
     for (i = 0; i < num_threads; i++) {
-        if (IS_CLIENT_THREAD(threads[i]->dcontext))
-            continue;
-        if (threads[i]->pid != mypid)
-            others = true;
-        else if (threads[i]->id != myid)
-            alone = false;
+        if (threads[i]->id != myid && threads[i]->pid == mypid) {
+            /* See comments in dynamo_process_exit_cleanup(): we terminate
+             * to make cleanup easier, but may want to switch to shifting
+             * the target thread to a stack-free loop.
+             */
+            DEBUG_DECLARE(synch_res =)
+            synch_with_thread(threads[i]->id, true /*block*/, true /*have initexit lock*/,
+                              valid_mcontext ? THREAD_SYNCH_VALID_MCONTEXT
+                                             : THREAD_SYNCH_NO_LOCKS_NO_XFER,
+                              THREAD_SYNCH_TERMINATED_AND_CLEANED,
+                              THREAD_SYNCH_SUSPEND_FAILURE_IGNORE);
+            /* initexit lock may be released and re-acquired in course of
+             * doing the synch so we may have races where the thread
+             * exits on its own (or new threads appear): we'll live
+             * with those for now.
+             */
+            ASSERT(synch_res == THREAD_SYNCH_RESULT_SUCCESS);
+        }
     }
     d_r_mutex_unlock(&thread_initexit_lock);
     global_heap_free(threads,
                      num_threads * sizeof(thread_record_t *) HEAPACCT(ACCT_THREAD_MGT));
-    return others && alone;
 }
 
 static void
@@ -6646,32 +6801,16 @@ handle_exit(dcontext_t *dcontext)
     bool exit_process = false;
 
     if (dcontext->sys_num == SYSNUM_EXIT_PROCESS) {
-        /* We can have multiple thread groups within the same address space.
-         * We need to know whether this is the only group left.
-         * FIXME: we can have races where new threads are created after our
+        /* FIXME: we can have races where new threads are created after our
          * check: we'll live with that for now, but the right approach is to
          * suspend all threads via synch_with_all_threads(), do the check,
          * and if exit_process then exit w/o resuming: though have to
          * coordinate lock access w/ cleanup_and_terminate.
          * Xref i#94.  Xref PR 541760.
          */
-        process_id_t mypid = get_process_id();
-        thread_record_t **threads;
-        int num_threads, i;
-        exit_process = true;
-        d_r_mutex_lock(&thread_initexit_lock);
-        get_list_of_threads(&threads, &num_threads);
-        for (i = 0; i < num_threads; i++) {
-            if (threads[i]->pid != mypid && !IS_CLIENT_THREAD(threads[i]->dcontext)) {
-                exit_process = false;
-                break;
-            }
-        }
+        exit_process = is_last_thread_group();
         if (!exit_process) {
-            /* We need to clean up the other threads in our group here. */
-            thread_id_t myid = d_r_get_thread_id();
             priv_mcontext_t mcontext;
-            DEBUG_DECLARE(thread_synch_result_t synch_res;)
             LOG(THREAD, LOG_TOP | LOG_SYSCALLS, 1,
                 "SYS_exit_group %d not final group: %d cleaning up just "
                 "threads in group\n",
@@ -6679,30 +6818,9 @@ handle_exit(dcontext_t *dcontext)
             /* Set where we are to handle reciprocal syncs */
             copy_mcontext(mc, &mcontext);
             mc->pc = SYSCALL_PC(dcontext);
-            for (i = 0; i < num_threads; i++) {
-                if (threads[i]->id != myid && threads[i]->pid == mypid) {
-                    /* See comments in dynamo_process_exit_cleanup(): we terminate
-                     * to make cleanup easier, but may want to switch to shifting
-                     * the target thread to a stack-free loop.
-                     */
-                    DEBUG_DECLARE(synch_res =)
-                    synch_with_thread(
-                        threads[i]->id, true /*block*/, true /*have initexit lock*/,
-                        THREAD_SYNCH_VALID_MCONTEXT, THREAD_SYNCH_TERMINATED_AND_CLEANED,
-                        THREAD_SYNCH_SUSPEND_FAILURE_IGNORE);
-                    /* initexit lock may be released and re-acquired in course of
-                     * doing the synch so we may have races where the thread
-                     * exits on its own (or new threads appear): we'll live
-                     * with those for now.
-                     */
-                    ASSERT(synch_res == THREAD_SYNCH_RESULT_SUCCESS);
-                }
-            }
+            exit_other_threads_in_group(true /*valid mcontext*/);
             copy_mcontext(&mcontext, mc);
         }
-        d_r_mutex_unlock(&thread_initexit_lock);
-        global_heap_free(
-            threads, num_threads * sizeof(thread_record_t *) HEAPACCT(ACCT_THREAD_MGT));
     }
 
     if (is_last_app_thread() && !dynamo_exited) {
@@ -7068,6 +7186,7 @@ handle_clone_pre(dcontext_t *dcontext)
      */
     clone3_syscall_args_t *dr_clone_args = NULL, *app_clone_args = NULL;
     uint app_clone_args_size = 0;
+    void *crec = NULL;
     if (dcontext->sys_num == SYS_clone3) {
         if (is_clone3_enosys) {
             /* We know that clone3 will return ENOSYS, so we skip the pre-syscall
@@ -7187,7 +7306,7 @@ handle_clone_pre(dcontext_t *dcontext)
             *sys_param_addr(dcontext, SYSCALL_PARAM_CLONE3_CLONE_ARGS) =
                 (reg_t)dr_clone_args;
             /* The pointer to the app's clone_args was saved in sys_param0 above. */
-            create_clone_record(dcontext, NULL, dr_clone_args, app_clone_args);
+            crec = create_clone_record(dcontext, NULL, dr_clone_args, app_clone_args);
             /* The kernel would reset DR's own handlers in the child, which DR needs even
              * before the child's first app instruction: a fault in is_thread_tls_initialized()
              * would kill it. The record keeps the flag, and DR emulates it for the app.
@@ -7200,10 +7319,12 @@ handle_clone_pre(dcontext_t *dcontext)
              * restored in the child in restore_clone_param_from_clone_record.
              */
             dcontext->sys_param1 = sys_param(dcontext, SYSCALL_PARAM_CLONE_STACK);
-            create_clone_record(dcontext,
-                                sys_param_addr(dcontext, SYSCALL_PARAM_CLONE_STACK), NULL,
-                                NULL);
+            crec = create_clone_record(dcontext,
+                                       sys_param_addr(dcontext, SYSCALL_PARAM_CLONE_STACK),
+                                       NULL, NULL);
         }
+        if (TEST(CLONE_VFORK, flags))
+            vfork_child_claim(dcontext, crec);
         os_clone_pre(dcontext);
         os_new_thread_pre();
     } else {
@@ -7644,8 +7765,9 @@ pre_system_call(dcontext_t *dcontext)
 #    ifdef MACOS
         create_clone_record(dcontext, (reg_t *)&mc->xsp, NULL, NULL);
 #    else
-        create_clone_record(dcontext, (reg_t *)&mc->xsp /*child uses parent sp*/, NULL,
-                            NULL);
+        vfork_child_claim(dcontext,
+                          create_clone_record(dcontext, (reg_t *)&mc->xsp /*child uses parent sp*/,
+                                              NULL, NULL));
 #    endif
         os_clone_pre(dcontext);
         os_new_thread_pre();
@@ -8499,6 +8621,10 @@ pre_system_call(dcontext_t *dcontext)
 
     } /* end switch */
 
+#ifdef LINUX
+    if (execute_syscall)
+        vfork_wait_begin(dcontext);
+#endif
     dcontext->whereami = old_whereami;
     return execute_syscall;
 }
@@ -8924,6 +9050,9 @@ post_system_call(dcontext_t *dcontext)
     DEBUG_DECLARE(bool ok;)
 
     RSTATS_INC(post_syscall);
+#ifdef LINUX
+    vfork_wait_end(dcontext);
+#endif
 
     old_whereami = dcontext->whereami;
     dcontext->whereami = DR_WHERE_SYSCALL_HANDLER;
