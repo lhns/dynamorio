@@ -544,6 +544,14 @@ reg_t
 get_clone_record_app_xsp(void *record);
 byte *
 get_clone_record_dstack(void *record);
+#ifdef LINUX
+volatile int *
+get_clone_record_vfork_counted(void *record);
+void
+set_clone_record_vfork_counted(void *record, volatile int *claim);
+#endif
+void
+os_new_thread_counted(void *clone_record);
 
 #if defined(AARCHXX) || defined(RISCV64)
 reg_t

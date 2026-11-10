@@ -2867,6 +2867,33 @@ os_new_thread_pre(void)
     ATOMIC_INC(int, uninit_thread_count);
 }
 
+/* Drops the uninit_thread_count os_new_thread_pre() took for this new thread.  A vfork
+ * child can be killed before it gets here, so its parent drops it then
+ * (cleanup_after_vfork_child_death()); whoever clears the claim drops the count.
+ */
+void
+os_new_thread_counted(void *clone_record)
+{
+#ifdef LINUX
+    volatile int *claim = get_clone_record_vfork_counted(clone_record);
+    if (claim != NULL && atomic_exchange_int(claim, 0) == 0)
+        return;
+#endif
+    ASSERT(uninit_thread_count > 0);
+    ATOMIC_DEC(int, uninit_thread_count);
+}
+
+#ifdef LINUX
+/* A vfork child and its parent share the claim on the uninit_thread_count taken for it. */
+static void
+vfork_child_claim(dcontext_t *dcontext, void *clone_record)
+{
+    os_thread_data_t *ostd = (os_thread_data_t *)dcontext->os_field;
+    ostd->vfork_child_counted = 1;
+    set_clone_record_vfork_counted(clone_record, &ostd->vfork_child_counted);
+}
+#endif
+
 /* This is called from pre_system_call() and before cloning a client thread in
  * dr_create_client_thread. Hence os_clone_pre is used for app threads as well
  * as client threads. Do not add anything that we do not want to happen while
@@ -6555,13 +6582,20 @@ cleanup_after_vfork_execve(dcontext_t *dcontext)
 }
 
 /* A vfork has returned, so its child has exec'ed, exited or died.  One that a signal
- * killed ran no exit path, and its stale record would hang the next synch.
- * Not handled: a child killed holding a DR lock or before dynamo_thread_init().
+ * killed ran no exit path, and its stale record would hang the next synch; one killed
+ * before dynamo_thread_init() left the uninit_thread_count taken for it, which every
+ * later synch_with_all_threads() would wait on.
+ * Not handled: a child killed holding a DR lock.
  */
 static void
 cleanup_after_vfork_child_death(dcontext_t *dcontext, ptr_int_t child)
 {
     thread_record_t *tr;
+    os_thread_data_t *ostd = (os_thread_data_t *)dcontext->os_field;
+    if (atomic_exchange_int(&ostd->vfork_child_counted, 0) == 1) {
+        ASSERT(uninit_thread_count > 0);
+        ATOMIC_DEC(int, uninit_thread_count);
+    }
     if (child <= 0)
         return;
     d_r_mutex_lock(&thread_initexit_lock);
@@ -7150,6 +7184,7 @@ handle_clone_pre(dcontext_t *dcontext)
      */
     clone3_syscall_args_t *dr_clone_args = NULL, *app_clone_args = NULL;
     uint app_clone_args_size = 0;
+    void *crec = NULL;
     if (dcontext->sys_num == SYS_clone3) {
         if (is_clone3_enosys) {
             /* We know that clone3 will return ENOSYS, so we skip the pre-syscall
@@ -7269,7 +7304,7 @@ handle_clone_pre(dcontext_t *dcontext)
             *sys_param_addr(dcontext, SYSCALL_PARAM_CLONE3_CLONE_ARGS) =
                 (reg_t)dr_clone_args;
             /* The pointer to the app's clone_args was saved in sys_param0 above. */
-            create_clone_record(dcontext, NULL, dr_clone_args, app_clone_args);
+            crec = create_clone_record(dcontext, NULL, dr_clone_args, app_clone_args);
             /* The kernel would reset DR's own handlers in the child, which DR needs even
              * before the child's first app instruction: a fault in is_thread_tls_initialized()
              * would kill it. The record keeps the flag, and DR emulates it for the app.
@@ -7282,10 +7317,12 @@ handle_clone_pre(dcontext_t *dcontext)
              * restored in the child in restore_clone_param_from_clone_record.
              */
             dcontext->sys_param1 = sys_param(dcontext, SYSCALL_PARAM_CLONE_STACK);
-            create_clone_record(dcontext,
-                                sys_param_addr(dcontext, SYSCALL_PARAM_CLONE_STACK), NULL,
-                                NULL);
+            crec = create_clone_record(dcontext,
+                                       sys_param_addr(dcontext, SYSCALL_PARAM_CLONE_STACK),
+                                       NULL, NULL);
         }
+        if (TEST(CLONE_VFORK, flags))
+            vfork_child_claim(dcontext, crec);
         os_clone_pre(dcontext);
         os_new_thread_pre();
     } else {
@@ -7726,8 +7763,9 @@ pre_system_call(dcontext_t *dcontext)
 #    ifdef MACOS
         create_clone_record(dcontext, (reg_t *)&mc->xsp, NULL, NULL);
 #    else
-        create_clone_record(dcontext, (reg_t *)&mc->xsp /*child uses parent sp*/, NULL,
-                            NULL);
+        vfork_child_claim(dcontext,
+                          create_clone_record(dcontext, (reg_t *)&mc->xsp /*child uses parent sp*/,
+                                              NULL, NULL));
 #    endif
         os_clone_pre(dcontext);
         os_new_thread_pre();
