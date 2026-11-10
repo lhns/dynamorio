@@ -9410,6 +9410,16 @@ post_system_call(dcontext_t *dcontext)
                 ASSERT(uninit_thread_count > 0);
                 ATOMIC_DEC(int, uninit_thread_count);
             }
+            /* Nor will one free the dstack create_clone_record() allocated for it. */
+            if (result < 0) {
+                stack_free(sysnum == SYS_clone3
+                               ? (byte *)((clone3_syscall_args_t *)dcontext->sys_param1)
+                                       ->stack +
+                                   DYNAMORIO_STACK_SIZE
+                               : get_clone_record_dstack(get_clone_record(
+                                     sys_param(dcontext, SYSCALL_PARAM_CLONE_STACK))),
+                           DYNAMORIO_STACK_SIZE);
+            }
             if (sysnum == SYS_clone3) {
                 /* Free DR's copy of clone_args and restore the pointer to the
                  * app's copy in the SYSCALL_PARAM_CLONE3_CLONE_ARGS reg.
@@ -9476,6 +9486,10 @@ post_system_call(dcontext_t *dcontext)
         /* restore xsp in parent */
         LOG(THREAD, LOG_SYSCALLS, 2, "vfork: restoring xsp from " PFX " to " PFX "\n",
             mc->xsp, dcontext->sys_param1);
+        /* A child that was never created will not free its dstack. */
+        if ((ptr_int_t)MCXT_SYSCALL_RES(mc) < 0)
+            stack_free(get_clone_record_dstack(get_clone_record(mc->xsp)),
+                       DYNAMORIO_STACK_SIZE);
         mc->xsp = dcontext->sys_param1;
 
         if (MCXT_SYSCALL_RES(mc) != 0) {
