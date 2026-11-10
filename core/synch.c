@@ -1033,6 +1033,21 @@ synch_with_thread(thread_id_t id, bool block, bool hold_initexit_lock,
                 adjust_wait_at_safe_spot(trec->dcontext, 1);
                 first_loop = false;
             }
+#ifdef UNIX
+            /* A thread waiting in vfork would not take the suspend signal before its
+             * child execs or exits.  The process is ending, so the kernel ends it; its
+             * state is leaked, as it may yet wake.
+             */
+            if (THREAD_SYNCH_IS_TERMINATED(desired_state) &&
+                os_thread_abandon_in_vfork(trec)) {
+                LOG(THREAD, LOG_SYNCH, 2, "Thread " TIDFMT " waits in vfork: abandoned\n",
+                    id);
+                adjust_wait_at_safe_spot(trec->dcontext, -1);
+                remove_thread(id);
+                res = THREAD_SYNCH_RESULT_SUCCESS;
+                goto exit_synch_with_thread;
+            }
+#endif
             if (!os_thread_suspend(trec)) {
                 /* XXX : eventually should be a real assert once we figure out
                  * how to handle threads with low privilege handles */

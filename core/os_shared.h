@@ -205,6 +205,10 @@ bool
 os_thread_resume(thread_record_t *tr);
 bool
 os_thread_terminate(thread_record_t *tr);
+#ifdef UNIX
+bool
+os_thread_abandon_in_vfork(thread_record_t *tr);
+#endif
 
 bool
 is_thread_currently_native(thread_record_t *tr);

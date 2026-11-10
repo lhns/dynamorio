@@ -192,6 +192,11 @@ typedef struct _os_thread_data_t {
     /* PR 450670: for re-entrant suspend signals */
     int processing_signal;
 
+    /* VFORK_WAITING from before a vfork-like syscall to after it; VFORK_ABANDONED once an
+     * exit synch has left this thread to the kernel (os_thread_abandon_in_vfork()).
+     */
+    volatile int vfork_wait;
+
     /* i#107: If -mangle_app_seg is on, these hold the bases for both SEG_TLS
      * and LIB_SEG_TLS.  If -mangle_app_seg is off, the base for LIB_SEG_TLS
      * will be NULL, but the base for SEG_TLS will still be present.
@@ -204,6 +209,8 @@ typedef struct _os_thread_data_t {
     struct _os_local_state_t *clone_tls; /* i#2089: a copy for children to inherit */
 #endif
 } os_thread_data_t;
+
+enum { VFORK_WAITING = 1, VFORK_ABANDONED = 2 };
 
 enum { ARGC_PTRACE_SENTINEL = -1 };
 
@@ -223,7 +230,10 @@ munmap_syscall(byte *addr, size_t len);
 
 /* in os.c */
 bool
-is_alone_in_secondary_thread_group(void);
+is_last_thread_group(void);
+
+void
+exit_other_threads_in_group(bool valid_mcontext);
 
 bool
 os_thread_take_over(priv_mcontext_t *mc, kernel_sigset_t *sigset);
