@@ -9712,13 +9712,16 @@ post_system_call(dcontext_t *dcontext)
             }
             /* Nor will one free the dstack create_clone_record() allocated for it. */
             if (result < 0) {
-                stack_free(sysnum == SYS_clone3
-                               ? (byte *)((clone3_syscall_args_t *)dcontext->sys_param1)
-                                       ->stack +
-                                   DYNAMORIO_STACK_SIZE
-                               : get_clone_record_dstack(get_clone_record(
-                                     sys_param(dcontext, SYSCALL_PARAM_CLONE_STACK))),
-                           DYNAMORIO_STACK_SIZE);
+                byte *dstack;
+                if (sysnum == SYS_clone3) {
+                    clone3_syscall_args_t *args =
+                        (clone3_syscall_args_t *)dcontext->sys_param1;
+                    dstack = (byte *)(ptr_uint_t)args->stack + DYNAMORIO_STACK_SIZE;
+                } else {
+                    dstack = get_clone_record_dstack(get_clone_record(
+                        sys_param(dcontext, SYSCALL_PARAM_CLONE_STACK)));
+                }
+                stack_free(dstack, DYNAMORIO_STACK_SIZE);
             }
             if (sysnum == SYS_clone3) {
                 /* Free DR's copy of clone_args and restore the pointer to the
