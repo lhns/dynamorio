@@ -218,6 +218,8 @@ typedef struct _clone_record_t {
      * post-syscall in the child thread.
      */
     clone3_syscall_args_t *app_clone_args;
+    /* For a vfork child: the parent's claim on the uninit_thread_count it took. */
+    volatile int *vfork_counted;
 #else
     uint clone_flags;
 #endif
@@ -869,6 +871,7 @@ create_clone_record(dcontext_t *dcontext, reg_t *app_thread_xsp)
     record->info.app_sigstack.ss_flags = SS_DISABLE;
     record->parent_info = (thread_sig_info_t *)dcontext->signal_field;
     record->pcprofile_info = dcontext->pcprofile_field;
+    IF_LINUX(record->vfork_counted = NULL);
 #if defined(AARCHXX) || defined(RISCV64)
     record->app_stolen_value = get_stolen_reg_val(get_mcontext(dcontext));
 #    ifdef ARM
@@ -912,6 +915,20 @@ create_clone_record(dcontext_t *dcontext, reg_t *app_thread_xsp)
 #endif
     return (void *)record;
 }
+
+#ifdef LINUX
+volatile int *
+get_clone_record_vfork_counted(void *record)
+{
+    return ((clone_record_t *)record)->vfork_counted;
+}
+
+void
+set_clone_record_vfork_counted(void *record, volatile int *claim)
+{
+    ((clone_record_t *)record)->vfork_counted = claim;
+}
+#endif
 
 /* This is to support dr_create_client_thread() */
 void

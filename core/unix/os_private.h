@@ -196,6 +196,10 @@ typedef struct _os_thread_data_t {
      * exit synch has left this thread to the kernel (os_thread_abandon_in_vfork()).
      */
     volatile int vfork_wait;
+    /* 1 while a vfork child has not dropped the uninit_thread_count taken for it.  The
+     * child or, if the child dies first, this thread drops it: whoever clears this.
+     */
+    volatile int vfork_child_counted;
 
     /* i#107: If -mangle_app_seg is on, these hold the bases for both SEG_TLS
      * and LIB_SEG_TLS.  If -mangle_app_seg is off, the base for LIB_SEG_TLS

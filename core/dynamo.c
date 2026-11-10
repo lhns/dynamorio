@@ -2304,7 +2304,7 @@ dynamo_thread_init(byte *dstack_in, priv_mcontext_t *mc, void *os_data,
 #ifdef UNIX
         if (dstack_in != NULL && !dropped_uninit_count) {
             dropped_uninit_count = true;
-            ATOMIC_DEC(int, uninit_thread_count);
+            os_new_thread_counted(os_data);
         }
 #endif
         /* logging should be safe, though might not actually result in log
@@ -2368,8 +2368,7 @@ dynamo_thread_init(byte *dstack_in, priv_mcontext_t *mc, void *os_data,
                under_dynamo_control, dcontext);
 #ifdef UNIX /* i#2600: Not easy on Windows: we rely on init_apc_go_native there. */
     if (dstack_in != NULL && !dropped_uninit_count) { /* Else not one we observed. */
-        ASSERT(uninit_thread_count > 0);
-        ATOMIC_DEC(int, uninit_thread_count);
+        os_new_thread_counted(os_data);
     }
 #endif
 #if defined(WINDOWS) && defined(DR_APP_EXPORTS)
