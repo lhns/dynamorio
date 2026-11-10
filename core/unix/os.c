@@ -4002,7 +4002,9 @@ os_thread_terminate(thread_record_t *tr)
 
 #ifdef LINUX
 /* True if tid of pid is blocked in the kernel in a vfork-like syscall, rather than in DR
- * code on either side of it.
+ * code on either side of it.  A non-dumpable process cannot read that file; then the caller's
+ * mark has to do, and a thread about to enter the syscall is taken as in it.  It starts its
+ * child as the process ends, like any thread that creates one after the exit's check.
  */
 static bool
 thread_in_vfork_syscall(process_id_t pid, thread_id_t tid)
@@ -4015,7 +4017,7 @@ thread_in_vfork_syscall(process_id_t pid, thread_id_t tid)
     NULL_TERMINATE_BUFFER(path);
     f = os_open(path, OS_OPEN_READ);
     if (f == INVALID_FILE)
-        return false;
+        return true;
     len = os_read(f, buf, sizeof(buf) - 1);
     os_close(f);
     if (len <= 0)
