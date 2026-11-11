@@ -1038,8 +1038,13 @@ synch_with_thread(thread_id_t id, bool block, bool hold_initexit_lock,
              * child execs or exits.  The process is ending, so the kernel ends it; its
              * state is leaked, as it may yet wake.
              */
-            if (THREAD_SYNCH_IS_TERMINATED(desired_state) &&
-                os_thread_abandon_in_vfork(trec)) {
+            bool abandoned = false, suspended;
+            if (THREAD_SYNCH_IS_TERMINATED(desired_state)) {
+                abandoned = os_thread_abandon_in_vfork(trec);
+                suspended = !abandoned && os_thread_suspend_or_abandon(trec, &abandoned);
+            } else
+                suspended = os_thread_suspend(trec);
+            if (abandoned) {
                 LOG(THREAD, LOG_SYNCH, 2, "Thread " TIDFMT " waits in vfork: abandoned\n",
                     id);
                 adjust_wait_at_safe_spot(trec->dcontext, -1);
@@ -1047,8 +1052,10 @@ synch_with_thread(thread_id_t id, bool block, bool hold_initexit_lock,
                 res = THREAD_SYNCH_RESULT_SUCCESS;
                 goto exit_synch_with_thread;
             }
-#endif
+            if (!suspended) {
+#else
             if (!os_thread_suspend(trec)) {
+#endif
                 /* XXX : eventually should be a real assert once we figure out
                  * how to handle threads with low privilege handles */
                 /* For dr_api_exit, we may have missed a thread exit. */

@@ -208,6 +208,10 @@ os_thread_terminate(thread_record_t *tr);
 #ifdef UNIX
 bool
 os_thread_abandon_in_vfork(thread_record_t *tr);
+bool
+os_thread_suspend_or_abandon(thread_record_t *tr, bool *abandoned);
+bool
+os_is_abandoned_vfork_waiter(void);
 #endif
 
 bool

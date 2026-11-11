@@ -5855,6 +5855,15 @@ main_signal_handler_C(byte *xsp)
         dcontext = GLOBAL_DCONTEXT;
     }
 
+    if (dcontext == NULL && os_is_abandoned_vfork_waiter()) {
+        /* Back from vfork after an exit abandoned it (os_thread_abandon_in_vfork()):
+         * its process is ending, so the signal (its child's SIGCHLD, or the suspend
+         * that found it in vfork) is dropped, as vfork_wait_end() would end it.
+         */
+        dynamorio_syscall(SYS_exit, 1, 0);
+        ASSERT_NOT_REACHED();
+    }
+
     if (dynamo_exited && d_r_get_num_threads() > 1 && sig == SIGSEGV) {
         /* PR 470957: this is almost certainly a race so just squelch it.
          * We live w/ the risk that it was holding a lock our release-build
