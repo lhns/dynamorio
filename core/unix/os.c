@@ -3982,8 +3982,29 @@ send_suspend_signal(thread_record_t *tr, pid_t pid, thread_id_t tid)
 #endif
 }
 
+static bool
+os_thread_suspend_common(thread_record_t *tr, bool *abandoned);
+
 bool
 os_thread_suspend(thread_record_t *tr)
+{
+    return os_thread_suspend_common(tr, NULL);
+}
+
+/* For a synch that ends the process.  A thread can enter vfork after
+ * os_thread_abandon_in_vfork() found it outside the syscall and before the suspend
+ * signal arrives; it then cannot take the signal until its child execs or exits, which
+ * can wait for this very exit.  So the wait for it also abandons it once it is in vfork.
+ */
+bool
+os_thread_suspend_or_abandon(thread_record_t *tr, bool *abandoned)
+{
+    *abandoned = false;
+    return os_thread_suspend_common(tr, abandoned);
+}
+
+static bool
+os_thread_suspend_common(thread_record_t *tr, bool *abandoned)
 {
     os_thread_data_t *ostd = (os_thread_data_t *)tr->dcontext->os_field;
     ASSERT(ostd != NULL);
@@ -4026,7 +4047,23 @@ os_thread_suspend(thread_record_t *tr)
          * point.  Xref i#2779.
          */
 #define SUSPEND_DEBUG_TIMEOUT_MS 5000
-        if (ksynch_wait(&ostd->suspended, 0, SUSPEND_DEBUG_TIMEOUT_MS) == -ETIMEDOUT) {
+#define SUSPEND_VFORK_POLL_MS 10
+        if (abandoned != NULL &&
+            ostd->vfork_wait == VFORK_WAITING && os_thread_abandon_in_vfork(tr)) {
+            /* Its pending signal is dropped on delivery: see
+             * os_is_abandoned_vfork_waiter().
+             */
+            d_r_mutex_lock(&ostd->suspend_lock);
+            ostd->suspend_count--;
+            d_r_mutex_unlock(&ostd->suspend_lock);
+            *abandoned = true;
+            return false;
+        }
+        if (ksynch_wait(&ostd->suspended, 0,
+                        abandoned != NULL && ostd->vfork_wait == VFORK_WAITING
+                            ? SUSPEND_VFORK_POLL_MS
+                            : SUSPEND_DEBUG_TIMEOUT_MS) == -ETIMEDOUT &&
+            (abandoned == NULL || ostd->vfork_wait != VFORK_WAITING)) {
             ASSERT_CURIOSITY(false && "failed to suspend thread in 5s");
         }
         if (ksynch_get_value(&ostd->suspended) == 0) {
@@ -4143,6 +4180,30 @@ os_thread_abandon_in_vfork(thread_record_t *tr)
     if (ostd->vfork_wait != VFORK_WAITING || !thread_in_vfork_syscall(tr->pid, tr->id))
         return false;
     return atomic_compare_exchange_int(&ostd->vfork_wait, VFORK_WAITING, VFORK_ABANDONED);
+#else
+    return false;
+#endif
+}
+
+/* True if this thread is one os_thread_abandon_in_vfork() gave up, back from vfork with
+ * its DR TLS still the copy os_clone_pre() made: invalid magic, its own tid, and no
+ * record.  A new thread in its clone window has its parent's tid there.  It must exit
+ * without running DR code: its process is ending and its state may be gone.
+ */
+bool
+os_is_abandoned_vfork_waiter(void)
+{
+#if defined(LINUX) && defined(X86)
+    os_local_state_t *tls;
+    thread_id_t tid;
+    if (!INTERNAL_OPTION(safe_read_tls_init) || !first_thread_tls_initialized ||
+        safe_read_tls_magic() != TLS_MAGIC_INVALID)
+        return false;
+    tls = (os_local_state_t *)safe_read_tls_self();
+    if (tls == NULL || !d_r_safe_read(&tls->tid, sizeof(tid), &tid) ||
+        tid != get_sys_thread_id())
+        return false;
+    return thread_lookup(tid) == NULL;
 #else
     return false;
 #endif
