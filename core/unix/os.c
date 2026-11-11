@@ -4196,8 +4196,9 @@ os_is_abandoned_vfork_waiter(void)
 #if defined(LINUX) && defined(X86)
     os_local_state_t *tls;
     thread_id_t tid;
+    /* Not during detach, which swaps TLS and drops records itself (i#3535). */
     if (!INTERNAL_OPTION(safe_read_tls_init) || !first_thread_tls_initialized ||
-        safe_read_tls_magic() != TLS_MAGIC_INVALID)
+        detacher_tid != INVALID_THREAD_ID || safe_read_tls_magic() != TLS_MAGIC_INVALID)
         return false;
     tls = (os_local_state_t *)safe_read_tls_self();
     if (tls == NULL || !d_r_safe_read(&tls->tid, sizeof(tid), &tid) ||
