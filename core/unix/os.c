@@ -4048,8 +4048,8 @@ os_thread_suspend_common(thread_record_t *tr, bool *abandoned)
          */
 #define SUSPEND_DEBUG_TIMEOUT_MS 5000
 #define SUSPEND_VFORK_POLL_MS 10
-        if (abandoned != NULL &&
-            ostd->vfork_wait == VFORK_WAITING && os_thread_abandon_in_vfork(tr)) {
+        bool poll = abandoned != NULL && ostd->vfork_wait == VFORK_WAITING;
+        if (poll && os_thread_abandon_in_vfork(tr)) {
             /* Its pending signal is dropped on delivery: see
              * os_is_abandoned_vfork_waiter().
              */
@@ -4060,10 +4060,9 @@ os_thread_suspend_common(thread_record_t *tr, bool *abandoned)
             return false;
         }
         if (ksynch_wait(&ostd->suspended, 0,
-                        abandoned != NULL && ostd->vfork_wait == VFORK_WAITING
-                            ? SUSPEND_VFORK_POLL_MS
-                            : SUSPEND_DEBUG_TIMEOUT_MS) == -ETIMEDOUT &&
-            (abandoned == NULL || ostd->vfork_wait != VFORK_WAITING)) {
+                        poll ? SUSPEND_VFORK_POLL_MS : SUSPEND_DEBUG_TIMEOUT_MS) ==
+                -ETIMEDOUT &&
+            !poll) {
             ASSERT_CURIOSITY(false && "failed to suspend thread in 5s");
         }
         if (ksynch_get_value(&ostd->suspended) == 0) {
