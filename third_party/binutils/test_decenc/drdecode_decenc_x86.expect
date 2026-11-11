@@ -73584,17 +73584,17 @@ test_s:
  90                   nop
  90                   nop
  90                   nop
- 66 0f 38 f0 19       movbe  (%ecx), %bx
+ 66 0f 38 f0 19       data16 movbe  (%ecx), %bx
  0f 38 f0 19          movbe  (%ecx), %ebx
- 66 0f 38 f1 19       movbe  %bx, (%ecx)
+ 66 0f 38 f1 19       data16 movbe  %bx, (%ecx)
  0f 38 f1 19          movbe  %ebx, (%ecx)
- 66 0f 38 f0 19       movbe  (%ecx), %bx
+ 66 0f 38 f0 19       data16 movbe  (%ecx), %bx
  0f 38 f0 19          movbe  (%ecx), %ebx
- 66 0f 38 f1 19       movbe  %bx, (%ecx)
+ 66 0f 38 f1 19       data16 movbe  %bx, (%ecx)
  0f 38 f1 19          movbe  %ebx, (%ecx)
- 66 0f 38 f0 19       movbe  (%ecx), %bx
+ 66 0f 38 f0 19       data16 movbe  (%ecx), %bx
  0f 38 f0 19          movbe  (%ecx), %ebx
- 66 0f 38 f1 19       movbe  %bx, (%ecx)
+ 66 0f 38 f1 19       data16 movbe  %bx, (%ecx)
  0f 38 f1 19          movbe  %ebx, (%ecx)
  90                   nop
  90                   nop

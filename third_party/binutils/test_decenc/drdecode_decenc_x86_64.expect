@@ -34890,22 +34890,22 @@ test_x86_64_s:
  0f ae 16             ldmxcsr (%rsi)
  0f ae 1e             stmxcsr (%rsi)
  0f ae 3e             clflush (%rsi)
- 66 45 0f 38 f0 29    movbe  (%r9), %r13w
+ 66 45 0f 38 f0 29    data16 movbe  (%r9), %r13w
  45 0f 38 f0 29       movbe  (%r9), %r13d
  4d 0f 38 f0 29       movbe  (%r9), %r13
- 66 45 0f 38 f1 29    movbe  %r13w, (%r9)
+ 66 45 0f 38 f1 29    data16 movbe  %r13w, (%r9)
  45 0f 38 f1 29       movbe  %r13d, (%r9)
  4d 0f 38 f1 29       movbe  %r13, (%r9)
- 66 45 0f 38 f0 29    movbe  (%r9), %r13w
+ 66 45 0f 38 f0 29    data16 movbe  (%r9), %r13w
  45 0f 38 f0 29       movbe  (%r9), %r13d
  4d 0f 38 f0 29       movbe  (%r9), %r13
- 66 45 0f 38 f1 29    movbe  %r13w, (%r9)
+ 66 45 0f 38 f1 29    data16 movbe  %r13w, (%r9)
  45 0f 38 f1 29       movbe  %r13d, (%r9)
  4d 0f 38 f1 29       movbe  %r13, (%r9)
- 66 0f 38 f0 19       movbe  (%rcx), %bx
+ 66 0f 38 f0 19       data16 movbe  (%rcx), %bx
  0f 38 f0 19          movbe  (%rcx), %ebx
  48 0f 38 f0 19       movbe  (%rcx), %rbx
- 66 0f 38 f1 19       movbe  %bx, (%rcx)
+ 66 0f 38 f1 19       data16 movbe  %bx, (%rcx)
  0f 38 f1 19          movbe  %ebx, (%rcx)
  48 0f 38 f1 19       movbe  %rbx, (%rcx)
  66 0f 6e 88 80 00 00 movd   0x80(%rax), %xmm1
