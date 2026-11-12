@@ -418,6 +418,16 @@ cur_trace_vmlist(dcontext_t *dcontext)
     return md->trace_vmlist;
 }
 
+/* LAB ONLY: unused, shifts code layout like the trace fix does. */
+void
+lab_layout_control(dcontext_t *dcontext)
+{
+    monitor_data_t *md = (monitor_data_t *)dcontext->monitor_field;
+    uint i;
+    for (i = 0; i < md->num_blks; i++)
+        md->blk_info[i].vmlist = NULL;
+}
+
 static void
 reset_trace_state(dcontext_t *dcontext, bool grab_link_lock)
 {
