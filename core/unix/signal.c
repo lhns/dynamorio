@@ -1209,6 +1209,8 @@ signal_thread_inherit(dcontext_t *dcontext, void *clone_record)
             info->sighand->is_shared = true;
             d_r_mutex_lock(&info->sighand->lock);
             info->sighand->refcount++;
+            print_file(STDERR, "<V3DIAG sighand-inherit tid=%d refcount=%d>\n", /* LAB */
+                       (int)d_r_get_thread_id(), info->sighand->refcount);
             for (i = 1; i <= MAX_SIGNUM; i++) {
                 if (!EMULATE_SIGMASK(info, i))
                     continue;
@@ -1605,6 +1607,8 @@ signal_thread_exit(dcontext_t *dcontext, bool other_thread)
     if (info->sighand->is_shared) {
         d_r_mutex_lock(&info->sighand->lock);
         info->sighand->refcount--;
+        print_file(STDERR, "<V3DIAG sighand-exit tid=%d refcount=%d other=%d>\n", /* LAB */
+                   (int)d_r_get_thread_id(), info->sighand->refcount, other_thread);
         d_r_mutex_unlock(&info->sighand->lock);
     }
     for (i = 1; i <= MAX_SIGNUM; i++) {
@@ -1616,6 +1620,9 @@ signal_thread_exit(dcontext_t *dcontext, bool other_thread)
     DOLOG(4, LOG_ASYNCH, dump_unmasked(dcontext, __FUNCTION__););
     if (!info->sighand->is_shared || info->sighand->refcount == 0) {
         LOG(THREAD, LOG_ASYNCH, 2, "signal handler cleanup:\n");
+        print_file(STDERR, "<V3DIAG sighand-restore tid=%d shared=%d refcount=%d other=%d>\n",
+                   (int)d_r_get_thread_id(), info->sighand->is_shared, /* LAB */
+                   info->sighand->refcount, other_thread);
         signal_info_exit_sigaction(dcontext, info, other_thread);
     }
 
