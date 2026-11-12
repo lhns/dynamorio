@@ -6104,6 +6104,10 @@ main_signal_handler_C(byte *xsp)
         ASSERT(dcontext != GLOBAL_DCONTEXT); /* Had to be try/except. */
 
         target = compute_memory_target(dcontext, pc, ucxt, siginfo, &is_write);
+        print_file(STDERR, /* LAB ONLY */
+                   "<V3DIAG segv-in tid=%d pc=%p code=%d addr=%p target=%p w=%d fcache=%d>\n",
+                   (int)d_r_get_thread_id(), pc, siginfo->si_code, siginfo->si_addr, target,
+                   is_write, 0);
 
         if (CLIENTS_EXIST() && is_in_client_lib(pc)) {
             /* i#1354: client might write to a page we made read-only.
@@ -6222,6 +6226,8 @@ main_signal_handler_C(byte *xsp)
             if (is_write &&
                 check_for_modified_code(dcontext, pc, ucxt, target, false /*!native*/)) {
                 /* it was our signal, so don't pass to app -- return now */
+                print_file(STDERR, "<V3DIAG segv-out tid=%d code-write>\n", /* LAB */
+                           (int)d_r_get_thread_id());
                 break;
             }
         }
