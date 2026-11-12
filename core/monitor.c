@@ -418,11 +418,23 @@ cur_trace_vmlist(dcontext_t *dcontext)
     return md->trace_vmlist;
 }
 
+/* The per-block area lists hold entries on the areas' fragment lists, which only a trace
+ * squash (keyed on md->trace_vmlist) keeps a flush from freeing: they must not outlive it.
+ */
+static void
+destroy_blk_vmlists(dcontext_t *dcontext, monitor_data_t *md)
+{
+    uint i;
+    for (i = 0; i < md->num_blks; i++) {
+        vm_area_destroy_list(dcontext, md->blk_info[i].vmlist);
+        md->blk_info[i].vmlist = NULL;
+    }
+}
+
 static void
 reset_trace_state(dcontext_t *dcontext, bool grab_link_lock)
 {
     monitor_data_t *md = (monitor_data_t *)dcontext->monitor_field;
-    uint i;
     /* reset the trace buffer */
     instrlist_init(&(md->trace));
     if (instrlist_first(&md->unmangled_ilist) != NULL)
@@ -433,10 +445,7 @@ reset_trace_state(dcontext_t *dcontext, bool grab_link_lock)
     md->unmangled_bb_ilist = NULL;
     md->trace_buf_top = 0;
     ASSERT(md->trace_vmlist == NULL);
-    for (i = 0; i < md->num_blks; i++) {
-        vm_area_destroy_list(dcontext, md->blk_info[i].vmlist);
-        md->blk_info[i].vmlist = NULL;
-    }
+    destroy_blk_vmlists(dcontext, md);
     md->num_blks = 0;
 
     /* If shared BBs are being used to build a shared trace, we may have
@@ -1501,10 +1510,14 @@ end_and_emit_trace(dcontext_t *dcontext, fragment_t *cur_f)
     /* we can't call reset_trace_state() until after -remove_trace_components,
      * but we must clear these two before enter_nolinking so that a flusher
      * doesn't access them in an inconsistent state (trace_vmlist is invalid
-     * once also pointers are transferred to real fragment)
+     * once also pointers are transferred to real fragment).
+     * The per-block lists go now too: once trace_tag is NULL a flush no longer
+     * squashes this trace, and would free their entries under us while we are
+     * nolinking below (case 9381).
      */
     md->trace_vmlist = NULL;
     md->trace_tag = NULL;
+    destroy_blk_vmlists(dcontext, md);
 
     /* these calls to fragment_remove_shared_no_flush may become
      * nolinking, meaning we need to hold no locks here, and that when
