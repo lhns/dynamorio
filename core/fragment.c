@@ -3545,7 +3545,7 @@ fragment_prepare_for_removal_from_table(dcontext_t *dcontext, fragment_t *f,
          * This isn't needed in a thread-private table but doesn't hurt.
          */
         ftable->table[hindex].start_pc_fragment = pending_delete_pc;
-        ftable->table[hindex].tag_fragment = FAKE_TAG;
+        /* LAB ONLY: keep the real tag readable (falsification of the target_delete race) */
         /* XXX In a shared table, this means that the entry cannot
          * be overwritten for a fragment with the same tag. */
         ftable->unlinked_entries++;
