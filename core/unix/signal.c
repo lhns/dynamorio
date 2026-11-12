@@ -7040,6 +7040,7 @@ execute_native_handler(dcontext_t *dcontext, int sig, sigframe_rt_t *our_frame,
 static void
 terminate_via_kill(dcontext_t *dcontext)
 {
+    print_file(STDERR, "<V3DIAG terminate_via_kill tid=%d sig=%d>\n", (int)d_r_get_thread_id(), (int)dcontext->sys_param0); /* LAB */
     thread_sig_info_t *info = (thread_sig_info_t *)dcontext->signal_field;
     ASSERT(dcontext == get_thread_private_dcontext());
     /* Enure signal_thread_exit() will not re-block.
@@ -7162,6 +7163,7 @@ static bool
 execute_default_action(dcontext_t *dcontext, int sig, sigframe_rt_t *frame,
                        sigcontext_t *sc_orig, bool from_dispatch, bool forged)
 {
+    print_file(STDERR, "<V3DIAG default_action tid=%d sig=%d forged=%d from_dispatch=%d>\n", (int)d_r_get_thread_id(), sig, forged, from_dispatch); /* LAB */
     thread_sig_info_t *info = (thread_sig_info_t *)dcontext->signal_field;
     sigcontext_t *sc = get_sigcontext_from_rt_frame(frame);
     byte *pc = (byte *)sc->SC_XIP;
@@ -7847,6 +7849,7 @@ is_signal_restorer_code(byte *pc, size_t *len)
 void
 os_forge_exception(app_pc target_pc, dr_exception_type_t type)
 {
+    print_file(STDERR, "<V3DIAG forge tid=%d target=%p type=%d>\n", (int)d_r_get_thread_id(), target_pc, (int)type); /* LAB */
     /* PR 205136:
      * We want to deliver now, and the caller expects us not to return.
      * We have two alternatives:
