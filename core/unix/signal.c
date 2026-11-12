@@ -4399,6 +4399,35 @@ abort_on_fault(dcontext_t *dcontext, uint dumpcore_flag, app_pc pc, byte *target
     kernel_ucontext_t *ucxt = &frame->uc;
     sigcontext_t *sc = SIGCXT_FROM_UCXT(ucxt);
     bool stack_overflow = (sig == SIGSEGV && is_stack_overflow(dcontext, target));
+    { /* LAB ONLY: where the faulting pc is */
+        bool dc_ok = dcontext != NULL && dcontext != GLOBAL_DCONTEXT;
+        bool fc = in_fcache(pc);
+        bool gen = dc_ok && in_generated_routine(dcontext, pc);
+        bool ibl = dc_ok && in_indirect_branch_lookup_code(dcontext, pc);
+        const char *ibl_name = NULL, *ibl_type = NULL;
+        app_pc ftag = NULL;
+        uint fflags = 0;
+        byte by[6] = { 0 };
+        d_r_safe_read(pc, sizeof(by), by);
+        if (ibl)
+            ibl_name = get_ibl_routine_name(dcontext, pc, &ibl_type);
+        if (fc && dc_ok) {
+            fragment_t wrapper, *f = fragment_pclookup(dcontext, pc, &wrapper);
+            if (f != NULL) {
+                ftag = f->tag;
+                fflags = f->flags;
+            }
+        }
+        print_file(STDERR,
+                   "<V3DIAG fault sig=%d pc=%p target=%p in_dr=%d fcache=%d gencode=%d ibl=%d "
+                   "ibl_name=%s/%s frag_tag=%p frag_flags=%#x whereami=%d dr_off=%#lx "
+                   "bytes=%02x %02x %02x %02x %02x %02x>\n",
+                   sig, pc, target, is_in_dynamo_dll(pc), fc, gen, ibl,
+                   ibl_name == NULL ? "-" : ibl_name, ibl_type == NULL ? "-" : ibl_type, ftag,
+                   fflags, dc_ok ? (int)dcontext->whereami : -1,
+                   (unsigned long)(pc - get_dynamorio_dll_start()),
+                   by[0], by[1], by[2], by[3], by[4], by[5]);
+    }
 #if defined(STATIC_LIBRARY) && defined(LINUX)
     thread_sig_info_t *info = (thread_sig_info_t *)dcontext->signal_field;
     uint orig_dumpcore_flag = dumpcore_flag;
