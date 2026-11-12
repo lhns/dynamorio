@@ -1436,12 +1436,16 @@ dynamo_nullcalls_exit(void)
 }
 
 /* called when we see that the process is about to exit */
+void
+labq_dump(void); /* LAB ONLY */
+
 int
 dynamo_process_exit(void)
 {
 #ifndef DEBUG
     bool each_thread;
 #endif
+    labq_dump();
     SELF_UNPROTECT_DATASEC(DATASEC_RARELY_PROT);
     synchronize_dynamic_options();
     SYSLOG(SYSLOG_INFORMATION, INFO_PROCESS_STOP, 2, get_application_name(),

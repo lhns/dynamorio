@@ -108,6 +108,69 @@ static char comment_buf_scratch[BUFSIZE];
 static char buf_iter[BUFSIZE];
 static char comment_buf_iter[BUFSIZE];
 
+
+/* LAB ONLY (lab-perf-maps-callers): who reads /proc/self/maps, and how many read()s. */
+#define LABQ_SLOTS 256
+#define LABQ_DEPTH 6
+typedef struct {
+    void *ra[LABQ_DEPTH];
+    uint calls;
+    uint reads;
+} labq_t;
+static labq_t labq[LABQ_SLOTS];
+static int labq_cur[2] = { -1, -1 };
+static uint labq_drop;
+
+static int
+labq_slot(void)
+{
+    void *ra[LABQ_DEPTH] = { 0 };
+    byte **fp = (byte **)__builtin_frame_address(0);
+    byte *sp = (byte *)&ra;
+    int i, j;
+    for (i = 0; i < LABQ_DEPTH; i++) {
+        byte **next;
+        if (fp == NULL || (byte *)fp < sp || (byte *)fp > sp + 32 * 1024 ||
+            !ALIGNED(fp, sizeof(void *)))
+            break;
+        ra[i] = fp[1];
+        next = (byte **)fp[0];
+        if (next <= fp)
+            break;
+        fp = next;
+    }
+    for (j = 0; j < LABQ_SLOTS; j++) {
+        if (labq[j].calls == 0) {
+            memcpy(labq[j].ra, ra, sizeof(ra));
+            return j;
+        }
+        if (memcmp(labq[j].ra, ra, sizeof(ra)) == 0)
+            return j;
+    }
+    labq_drop++;
+    return -1;
+}
+
+void
+labq_dump(void)
+{
+    static bool done;
+    int j, i;
+    if (done)
+        return;
+    done = true;
+    print_file(STDERR, "LABQ base " PFX " pid %d drop %u
+", get_dynamorio_dll_start(),
+               get_process_id(), labq_drop);
+    for (j = 0; j < LABQ_SLOTS && labq[j].calls != 0; j++) {
+        print_file(STDERR, "LABQ %u %u", labq[j].calls, labq[j].reads);
+        for (i = 0; i < LABQ_DEPTH; i++)
+            print_file(STDERR, " " PFX, labq[j].ra[i]);
+        print_file(STDERR, "
+");
+    }
+}
+
 void
 memquery_init(void)
 {
@@ -171,6 +234,9 @@ memquery_iterator_start(memquery_iter_t *iter, app_pc start, bool may_alloc)
     mi->newline = NULL;
     mi->bufread = 0;
     iter->comment = mi->comment_buffer;
+    labq_cur[may_alloc ? 1 : 0] = labq_slot();
+    if (labq_cur[may_alloc ? 1 : 0] >= 0)
+        labq[labq_cur[may_alloc ? 1 : 0]].calls++;
 
     iter->may_alloc = may_alloc;
 
@@ -210,6 +276,8 @@ memquery_iterator_next(memquery_iter_t *iter)
     if (mi->newline == NULL) {
         mi->bufwant = BUFSIZE - 1;
         mi->bufread = os_read(mi->maps, mi->buf, mi->bufwant);
+        if (labq_cur[iter->may_alloc ? 1 : 0] >= 0)
+            labq[labq_cur[iter->may_alloc ? 1 : 0]].reads++;
         ASSERT(mi->bufread <= mi->bufwant);
         LOG(GLOBAL, LOG_VMAREAS, 6, "get_memory_info_from_os: bytes read %d/want %d\n",
             mi->bufread, mi->bufwant);
@@ -232,6 +300,8 @@ memquery_iterator_next(memquery_iter_t *iter)
             /* XXX corner case: if len == 0, nothing to move */
             memmove(mi->buf, line, len);
             mi->bufread = os_read(mi->maps, mi->buf + len, mi->bufwant);
+            if (labq_cur[iter->may_alloc ? 1 : 0] >= 0)
+                labq[labq_cur[iter->may_alloc ? 1 : 0]].reads++;
             ASSERT(mi->bufread <= mi->bufwant);
             if (mi->bufread <= 0)
                 return false;
