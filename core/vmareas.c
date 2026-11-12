@@ -3480,10 +3480,27 @@ was_executable_area_writable(app_pc addr)
      * causes for some apps.
      * Keep readlock to avoid races.
      */
+    uint lab_prot = 0, lab_os = 0, lab_vmf = 0, lab_ff = 0; /* LAB ONLY */
+    bool lab_mi = false, lab_osok = false;
     if (!found_area) {
         uint prot;
         if (get_memory_info(addr, NULL, NULL, &prot))
             was_writable = TESTANY(MEMPROT_WRITE, prot) && !is_dynamo_address(addr);
+    }
+    if (!was_writable) { /* LAB ONLY */
+        vm_area_t *a = NULL;
+        if (lookup_addr(executable_areas, addr, &a) && a != NULL) {
+            lab_vmf = a->vm_flags;
+            lab_ff = a->frag_flags;
+        }
+        lab_mi = get_memory_info(addr, NULL, NULL, &lab_prot);
+        lab_osok = get_memory_info_from_os(addr, NULL, NULL, &lab_os);
+        print_file(STDERR,
+                   "<V3DIAG notwritable addr=%p found=%d vmflags=%#x fragflags=%#x memcache=%d:%#x "
+                   "os=%d:%#x dr=%d>
+",
+                   addr, found_area, lab_vmf, lab_ff, lab_mi, lab_prot, lab_osok, lab_os,
+                   is_dynamo_address(addr));
     }
     d_r_read_unlock(&executable_areas->lock);
     return was_writable;
