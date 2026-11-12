@@ -7849,7 +7849,19 @@ is_signal_restorer_code(byte *pc, size_t *len)
 void
 os_forge_exception(app_pc target_pc, dr_exception_type_t type)
 {
-    print_file(STDERR, "<V3DIAG forge tid=%d target=%p type=%d>\n", (int)d_r_get_thread_id(), target_pc, (int)type); /* LAB */
+    { /* LAB ONLY: who forged it, and the dispatch state */
+        dcontext_t *ldc = get_thread_private_dcontext();
+        byte *b = get_dynamorio_dll_start();
+        print_file(STDERR,
+                   "<V3DIAG forge tid=%d target=%p type=%d ra0=%#lx next_tag=%p "
+                   "last_tag=%p last_exit_flags=%#x whereami=%d>\n",
+                   (int)d_r_get_thread_id(), target_pc, (int)type,
+                   (unsigned long)((byte *)__builtin_return_address(0) - b),
+                   ldc == NULL ? NULL : ldc->next_tag,
+                   ldc == NULL || ldc->last_fragment == NULL ? NULL : ldc->last_fragment->tag,
+                   ldc == NULL || ldc->last_exit == NULL ? 0 : ldc->last_exit->flags,
+                   ldc == NULL ? -1 : (int)ldc->whereami);
+    }
     /* PR 205136:
      * We want to deliver now, and the caller expects us not to return.
      * We have two alternatives:
