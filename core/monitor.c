@@ -418,6 +418,25 @@ cur_trace_vmlist(dcontext_t *dcontext)
     return md->trace_vmlist;
 }
 
+/* LAB ONLY: how many per-block area lists of the trace in progress overlap [start, end). */
+int
+trace_blk_lists_overlap(dcontext_t *dcontext, app_pc start, app_pc end, uint *num_blks)
+{
+    monitor_data_t *md = (monitor_data_t *)dcontext->monitor_field;
+    uint i;
+    int n = 0;
+    *num_blks = 0;
+    if (md == NULL)
+        return 0;
+    *num_blks = md->num_blks;
+    for (i = 0; i < md->num_blks; i++) {
+        if (md->blk_info[i].vmlist != NULL &&
+            vm_list_overlaps(dcontext, md->blk_info[i].vmlist, start, end))
+            n++;
+    }
+    return n;
+}
+
 static void
 reset_trace_state(dcontext_t *dcontext, bool grab_link_lock)
 {

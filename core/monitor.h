@@ -102,6 +102,10 @@ cur_trace_tag(dcontext_t *dcontext);
 void *
 cur_trace_vmlist(dcontext_t *dcontext);
 
+/* LAB ONLY */
+int
+trace_blk_lists_overlap(dcontext_t *dcontext, app_pc start, app_pc end, uint *num_blks);
+
 /* This routine internally calls enter_couldbelinking, thus it is safe
  * to call from any linking state. Restores linking to previous state at exit.
  * If calling on another thread, caller should be synchornized with that thread
