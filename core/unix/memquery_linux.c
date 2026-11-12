@@ -159,15 +159,13 @@ labq_dump(void)
     if (done)
         return;
     done = true;
-    print_file(STDERR, "LABQ base " PFX " pid %d drop %u
-", get_dynamorio_dll_start(),
+    print_file(STDERR, "LABQ base " PFX " pid %d drop %u\n", get_dynamorio_dll_start(),
                get_process_id(), labq_drop);
     for (j = 0; j < LABQ_SLOTS && labq[j].calls != 0; j++) {
         print_file(STDERR, "LABQ %u %u", labq[j].calls, labq[j].reads);
         for (i = 0; i < LABQ_DEPTH; i++)
             print_file(STDERR, " " PFX, labq[j].ra[i]);
-        print_file(STDERR, "
-");
+        print_file(STDERR, "\n");
     }
 }
 
