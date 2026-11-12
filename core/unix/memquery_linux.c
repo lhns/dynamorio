@@ -126,11 +126,11 @@ labq_slot(void)
 {
     void *ra[LABQ_DEPTH] = { 0 };
     byte **fp = (byte **)__builtin_frame_address(0);
-    byte *sp = (byte *)&ra;
+    ptr_uint_t sp = (ptr_uint_t)&ra;
     int i, j;
     for (i = 0; i < LABQ_DEPTH; i++) {
         byte **next;
-        if (fp == NULL || (byte *)fp < sp || (byte *)fp > sp + 32 * 1024 ||
+        if (fp == NULL || (ptr_uint_t)fp < sp || (ptr_uint_t)fp > sp + 32 * 1024 ||
             !ALIGNED(fp, sizeof(void *)))
             break;
         ra[i] = fp[1];
