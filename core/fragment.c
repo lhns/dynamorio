@@ -6167,6 +6167,7 @@ flush_fragments_thread_unlink(dcontext_t *dcontext, int thread_index,
                               dcontext_t *tgt_dcontext)
 {
     per_thread_t *tgt_pt = (per_thread_t *)tgt_dcontext->fragment_field;
+    bool lab_squashed = false;
 
     /* if a trace-in-progress crosses this region, must squash the trace
      * (all traces are essentially frozen now since threads stop in d_r_dispatch)
@@ -6180,6 +6181,20 @@ flush_fragments_thread_unlink(dcontext_t *dcontext, int thread_index,
             LOG(THREAD, LOG_FRAGMENT, 2, "\tsquashing trace of thread " TIDFMT "\n",
                 tgt_dcontext->owning_thread);
             trace_abort(tgt_dcontext);
+            lab_squashed = true;
+        }
+    }
+    if (flush_size > 0 && !lab_squashed) { /* LAB ONLY */
+        uint nb;
+        int ov = trace_blk_lists_overlap(tgt_dcontext, flush_base, flush_base + flush_size,
+                                         &nb);
+        if (ov > 0) {
+            print_file(STDERR,
+                       "<V3DIAG noabort flusher=%d target=%d self=%d building=%d tvl=%d "
+                       "overlap=%d of %u>\n",
+                       (int)d_r_get_thread_id(), (int)tgt_dcontext->owning_thread,
+                       tgt_dcontext == dcontext, is_building_trace(tgt_dcontext),
+                       cur_trace_vmlist(tgt_dcontext) != NULL, ov, nb);
         }
     }
 

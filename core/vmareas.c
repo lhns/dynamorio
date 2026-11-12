@@ -9521,6 +9521,8 @@ vm_area_unlink_fragments(dcontext_t *dcontext, app_pc start, app_pc end,
                 ASSERT(f != next && "i#942: changing f's fraglist derails iteration");
                 /* case 9381: this shouldn't happen but we handle it to avoid crash */
                 if (FRAG_MULTI_INIT(entry)) {
+                    print_file(STDERR, "<V3DIAG stale-multi-init flusher=%d>\n", /* LAB */
+                               (int)d_r_get_thread_id());
                     ASSERT(false && "stale multi-init entry on frags list");
                     /* stale init entry, just remove it */
                     vm_area_remove_fragment(dcontext, entry);
