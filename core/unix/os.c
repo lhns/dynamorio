@@ -5437,6 +5437,40 @@ make_writable(byte *pc, size_t size)
     return true;
 }
 
+bool
+change_protection_known(byte *pc, size_t size, bool writable, uint rx_memprot)
+{
+    uint prot = memprot_to_osprot(rx_memprot) | (writable ? PROT_WRITE : 0);
+    long res;
+    ASSERT(ALIGNED(pc, PAGE_SIZE) && size > 0 && ALIGNED(size, PAGE_SIZE));
+    DOCHECK(1, {
+        /* The bits make_writable() and make_unwritable() would have kept, less an exec
+         * the kernel adds under READ_IMPLIES_EXEC.
+         */
+        uint cur;
+        if (!is_in_dynamo_dll(pc) && get_memory_info(pc, NULL, NULL, &cur)) {
+            cur &= MEMPROT_READ | MEMPROT_EXEC;
+            ASSERT(cur == rx_memprot || cur == (rx_memprot | MEMPROT_EXEC));
+        }
+    });
+    STATS_INC(protection_change_calls);
+    STATS_ADD(protection_change_pages, size / PAGE_SIZE);
+    res = mprotect_syscall((void *)pc, size, prot);
+    LOG(THREAD_GET, LOG_VMAREAS, 3, "change_protection_known: " PFX "-" PFX " %d => %d\n",
+        pc, pc + size, prot, res);
+    ASSERT(res == 0);
+    if (res != 0)
+        return false;
+#ifndef HAVE_MEMINFO_QUERY
+    if (memcache_initialized()) {
+        /* "exists" as make_writable() and make_unwritable() pass it. */
+        memcache_update_locked(pc, pc + size, osprot_to_memprot(prot),
+                               -1 /*type unchanged*/, writable);
+    }
+#endif
+    return true;
+}
+
 /* like make_writable but adds COW */
 bool
 make_copy_on_writable(byte *pc, size_t size)
