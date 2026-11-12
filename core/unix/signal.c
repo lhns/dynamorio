@@ -6226,6 +6226,10 @@ main_signal_handler_C(byte *xsp)
             }
         }
         /* pass it to the application (or client) */
+        print_file(STDERR, /* LAB ONLY */
+                   "<V3DIAG passing sig=%d pc=%p target=%p is_write=%d syscall=%d code=%d "
+                   "addr=%p>\n",
+                   sig, pc, target, is_write, syscall_signal, siginfo->si_code, siginfo->si_addr);
         if (dcontext->currently_stopped) {
             execute_native_handler(dcontext, sig, frame, xsp);
             break;
