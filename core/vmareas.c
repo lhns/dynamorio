@@ -3497,8 +3497,7 @@ was_executable_area_writable(app_pc addr)
         lab_osok = get_memory_info_from_os(addr, NULL, NULL, &lab_os);
         print_file(STDERR,
                    "<V3DIAG notwritable addr=%p found=%d vmflags=%#x fragflags=%#x memcache=%d:%#x "
-                   "os=%d:%#x dr=%d>
-",
+                   "os=%d:%#x dr=%d>\n",
                    addr, found_area, lab_vmf, lab_ff, lab_mi, lab_prot, lab_osok, lab_os,
                    is_dynamo_address(addr));
     }
