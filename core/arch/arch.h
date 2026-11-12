@@ -1719,6 +1719,17 @@ use_ibt_prefix(uint flags)
               DYNAMO_OPTION(bb_ibl_targets)));
 }
 
+/* With target prefixes, the IBL hit path copies the matched tag here and the
+ * target_delete entry reads it back. The table entry's own tag cannot be reread
+ * there: a thread retiring the entry may already have replaced it with FAKE_TAG.
+ * The slot holds the exit's linkstub on the way in, which a hit no longer needs;
+ * without the table in TLS it holds the spilled dcontext base instead, so the
+ * old reread remains there.
+ */
+#define IBL_HIT_TAG_SLOT TLS_REG3_SLOT
+#define IBL_HIT_SAVES_TAG(absolute, only_spill_state_in_tls) \
+    (!(absolute) && !(only_spill_state_in_tls))
+
 static inline bool
 ibl_use_target_prefix(ibl_code_t *ibl_code)
 {

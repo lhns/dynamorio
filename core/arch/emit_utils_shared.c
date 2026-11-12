@@ -3229,6 +3229,10 @@ append_ibl_found(dcontext_t *dcontext, instrlist_t *ilist, ibl_code_t *ibl_code,
             APP(ilist, SAVE_TO_TLS(dcontext, SCRATCH_REG1, DIRECT_STUB_SPILL_SLOT));
         }
     }
+    if (target_prefix && IBL_HIT_SAVES_TAG(absolute, only_spill_state_in_tls)) {
+        /* For target_delete: see IBL_HIT_TAG_SLOT. */
+        APP(ilist, SAVE_TO_TLS(dcontext, SCRATCH_REG1, IBL_HIT_TAG_SLOT));
+    }
 #if defined(X86) && defined(X64)
     if (x86_to_x64_ibl_opt) {
         APP(ilist, RESTORE_FROM_REG(dcontext, SCRATCH_REG1, REG_R10));
