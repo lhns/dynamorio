@@ -1572,6 +1572,7 @@ end_and_emit_trace(dcontext_t *dcontext, fragment_t *cur_f)
         ASSERT(!TESTANY(FRAG_TRACE_BUILDING, trace_head_f->flags));
 #endif
 
+    __asm__ volatile("jmp 1f; .skip 48, 0x90; 1:" ::: "memory"); /* LAB ONLY: code size */
 end_and_emit_trace_return:
     if (cur_f == NULL && cur_f_tag == tag)
         return trace_f;
