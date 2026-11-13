@@ -1529,8 +1529,18 @@ protect_generated_code(generated_code_t *code_in, bool writable)
             code->writable = writable;
         }
         STATS_INC(gencode_prot_changes);
+#ifdef UNIX
+        /* Gencode is r-x; the writable view under -satisfy_w_xor_x is r--. Passing
+         * that saves a /proc/self/maps read per change, which JIT flushes make hot.
+         */
+        byte *writable_start = vmcode_get_writable_addr(genstart);
+        change_protection_known(writable_start, code->commit_end_pc - genstart, writable,
+                                MEMPROT_READ |
+                                    (writable_start == genstart ? MEMPROT_EXEC : 0));
+#else
         change_protection(vmcode_get_writable_addr(genstart),
                           code->commit_end_pc - genstart, writable);
+#endif
         if (writable) {
             ASSERT(!code->writable);
             code->writable = writable;

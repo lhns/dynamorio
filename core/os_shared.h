@@ -575,6 +575,13 @@ make_writable(byte *pc, size_t size);
  * and marks that memory NOT writable, preserves other flags */
 void
 make_unwritable(byte *pc, size_t size);
+#ifdef UNIX
+/* Like change_protection(), for memory whose read and execute bits the caller knows:
+ * change_protection() queries them, which for DR's own memory reads /proc/self/maps.
+ */
+bool
+change_protection_known(byte *pc, size_t size, bool writable, uint rx_memprot);
+#endif
 /* like make_writable but adds COW (note: only usable if allocated COW) */
 bool
 make_copy_on_writable(byte *pc, size_t size);
