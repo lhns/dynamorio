@@ -1578,6 +1578,21 @@ end_and_emit_trace(dcontext_t *dcontext, fragment_t *cur_f)
      * Only the trace tables: fragment_lookup() prefers a private bb to a shared trace.
      */
     trace_f = fragment_lookup_trace(dcontext, tag);
+    { /* LAB ONLY: what the broader lookup would have returned */
+        static volatile uint64 n, nbb, nnull, nother;
+        fragment_t *any = fragment_lookup(dcontext, tag);
+        uint64 k = __atomic_add_fetch(&n, 1, __ATOMIC_RELAXED);
+        if (trace_f == NULL)
+            __atomic_add_fetch(&nnull, 1, __ATOMIC_RELAXED);
+        if (any != NULL && !TESTANY(FRAG_IS_TRACE, any->flags))
+            __atomic_add_fetch(&nbb, 1, __ATOMIC_RELAXED);
+        else if (any != trace_f)
+            __atomic_add_fetch(&nother, 1, __ATOMIC_RELAXED);
+        if ((k & (k - 1)) == 0 && k >= 1024)
+            print_file(STDERR, "<V3LK emits=%lu trace_null=%lu lookup_bb=%lu lookup_other=%lu>\n",
+                       (unsigned long)k, (unsigned long)nnull, (unsigned long)nbb,
+                       (unsigned long)nother);
+    }
 
 end_and_emit_trace_return:
     if (cur_f == NULL && cur_f_tag == tag)
