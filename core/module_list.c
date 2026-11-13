@@ -34,6 +34,7 @@
 #include "globals.h"
 #include "instrument.h"
 #include "native_exec.h"
+#include "pcache.h"
 #ifdef WINDOWS
 #    include "ntdll.h" /* for protect_virtual_memory */
 #endif
@@ -329,6 +330,8 @@ module_list_remove(app_pc base, size_t view_size)
     ASSERT_CURIOSITY(ma != NULL); /* loader can't have a race */
 
     native_exec_module_unload(ma);
+    if (ma != NULL)
+        pcache_module_unload(ma->start);
 
     /* defensively checking */
     if (ma != NULL) {

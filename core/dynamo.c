@@ -62,6 +62,7 @@
 #include "synch.h"
 #include "native_exec.h"
 #include "jit_opt.h"
+#include "pcache.h"
 
 #ifdef ANNOTATIONS
 #    include "annotations.h"
@@ -1444,6 +1445,7 @@ dynamo_process_exit(void)
 #endif
     SELF_UNPROTECT_DATASEC(DATASEC_RARELY_PROT);
     synchronize_dynamic_options();
+    pcache_process_exit();
     SYSLOG(SYSLOG_INFORMATION, INFO_PROCESS_STOP, 2, get_application_name(),
            get_application_pid());
 #ifdef DEBUG
