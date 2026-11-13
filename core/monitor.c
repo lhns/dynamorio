@@ -1575,8 +1575,9 @@ end_and_emit_trace(dcontext_t *dcontext, fragment_t *cur_f)
     /* The removals above can go nolinking, where this thread signs off on pending
      * deletions: a flush in that window can free trace_f, and dispatch's
      * was_I_flushed check no longer catches it once this thread is up to date.
+     * Only the trace tables: fragment_lookup() prefers a private bb to a shared trace.
      */
-    trace_f = fragment_lookup(dcontext, tag);
+    trace_f = fragment_lookup_trace(dcontext, tag);
 
 end_and_emit_trace_return:
     if (cur_f == NULL && cur_f_tag == tag)
