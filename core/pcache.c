@@ -431,7 +431,8 @@ build_ilist(dcontext_t *dcontext, const pc_entry_t *e, app_pc tag)
         case R_ICTI:
             if (nicti == sizeof(icti) / sizeof(icti[0]))
                 ok = false;
-            icti[nicti++] = p;
+            else
+                icti[nicti++] = p;
             p += 4;
             break;
         case R_EXIT: {
