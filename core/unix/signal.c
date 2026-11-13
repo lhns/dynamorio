@@ -94,6 +94,7 @@
 #endif
 
 #include "instrument.h"
+#include "../v3diag.h"
 
 #ifdef VMX86_SERVER
 #    include <errno.h>
@@ -4427,6 +4428,50 @@ abort_on_fault(dcontext_t *dcontext, uint dumpcore_flag, app_pc pc, byte *target
                    fflags, dc_ok ? (int)dcontext->whereami : -1,
                    (unsigned long)(pc - get_dynamorio_dll_start()),
                    by[0], by[1], by[2], by[3], by[4], by[5]);
+        /* LAB ONLY: freed shared fragments or stubs holding pc, and this thread's history. */
+        print_file(STDERR,
+                   "<V3DIAG where dstack=%d altstack=%d initstack=%d dynamo_addr=%d seq=%lu "
+                   "nfree=%lu ft_global=%u ft_self=%u last_exit=%p last_frag=%p next_tag=%p>\n",
+                   dc_ok && is_on_dstack(dcontext, (byte *)sc->SC_XSP),
+                   dc_ok && is_on_alt_stack(dcontext, (byte *)sc->SC_XSP),
+                   is_on_initstack((byte *)sc->SC_XSP), is_dynamo_address(pc),
+                   (unsigned long)v3d_seq, (unsigned long)v3d_nfree, flushtime_global,
+                   dc_ok ? get_flushtime_last_update(dcontext) : 0,
+                   dc_ok ? dcontext->last_exit : NULL,
+                   dc_ok && dcontext->last_fragment != NULL ? dcontext->last_fragment->tag
+                                                            : NULL,
+                   dc_ok ? dcontext->next_tag : NULL);
+        uint64 nf = v3d_nfree < V3D_FREES ? v3d_nfree : V3D_FREES;
+        int shown = 0;
+        for (uint64 i = 0; i < nf && shown < 12; i++) {
+            v3d_free_t *e = &v3d_frees[(v3d_nfree - 1 - i) % V3D_FREES];
+            int hit = -1;
+            if (pc >= e->start && pc < e->start + e->size)
+                hit = 99;
+            for (uint s = 0; s < e->nstubs && s < V3D_STUBS; s++) {
+                if (pc >= e->stub[s] && pc < e->stub[s] + 32)
+                    hit = s;
+            }
+            if (hit < 0)
+                continue;
+            shown++;
+            print_file(STDERR,
+                       "<V3DIAG freed seq=%lu hit=%d tag=%p start=%p size=%u flags=%#x "
+                       "ft_global=%u ft_self=%u by_tid=%d nstubs=%u stub0=%p stub1=%p>\n",
+                       (unsigned long)e->seq, hit, e->tag, e->start, e->size, e->flags,
+                       e->ft_global, e->ft_self, (int)e->tid, e->nstubs, e->stub[0],
+                       e->nstubs > 1 ? e->stub[1] : NULL);
+        }
+        if (dc_ok) {
+            v3d_thread_t *t = &v3d_threads[(uint)dcontext->owning_thread % V3D_THREADS];
+            uint n = t->pos < V3D_EVENTS ? t->pos : V3D_EVENTS;
+            for (uint i = n; i > 0; i--) {
+                v3d_ev_t *e = &t->ev[(t->pos - i) % V3D_EVENTS];
+                print_file(STDERR, "<V3DIAG ev seq=%lu kind=%u u=%u a=%p b=%p c=%p>\n",
+                           (unsigned long)e->seq, e->kind, e->u, (void *)e->a,
+                           (void *)e->b, (void *)e->c);
+            }
+        }
     }
 #if defined(STATIC_LIBRARY) && defined(LINUX)
     thread_sig_info_t *info = (thread_sig_info_t *)dcontext->signal_field;
@@ -5900,6 +5945,8 @@ main_signal_handler_C(byte *xsp)
          */
         exit_thread_syscall(1);
     }
+    if (dcontext != NULL && dcontext != GLOBAL_DCONTEXT && sig != SUSPEND_SIGNAL)
+        v3d_log(dcontext, V3D_SIG, sig, sig, sc->SC_XIP, dcontext->whereami);
     /* XXX: ensure the path for recording a pending signal does not grab any DR locks
      * that could have been interrupted
      * e.g., synchronize_dynamic_options grabs the stats_lock!
@@ -7550,6 +7597,7 @@ handle_sigreturn(dcontext_t *dcontext, void *ucxt_param, int style)
 #endif
 {
     thread_sig_info_t *info = (thread_sig_info_t *)dcontext->signal_field;
+    v3d_log(dcontext, V3D_SIGRET, 0, (ptr_uint_t)dcontext->next_tag, 0, 0);
     sigcontext_t *sc = NULL; /* initialize to satisfy Mac clang */
     kernel_ucontext_t *ucxt = NULL;
     int sig = 0;

@@ -49,6 +49,12 @@
 #include "stddef_wrapper.h" /* for offsetof */
 #include "limits_wrapper.h" /* UINT_MAX */
 #include "perscache.h"
+#include "v3diag.h"
+
+/* LAB ONLY: see v3diag.h. */
+v3d_thread_t v3d_threads[V3D_THREADS];
+v3d_free_t v3d_frees[V3D_FREES];
+volatile uint64 v3d_seq, v3d_nfree;
 #include "synch.h"
 #ifdef UNIX
 #    include "nudge.h"
@@ -2550,6 +2556,28 @@ fragment_free(dcontext_t *dcontext, fragment_t *f)
     /* N.B.: monitor_remove_fragment() was called in fragment_delete,
      * which is assumed to have been called prior to fragment_free
      */
+
+    if (TEST(FRAG_SHARED, f->flags)) { /* LAB ONLY: ledger of freed shared fragments */
+        uint64 n = __atomic_fetch_add(&v3d_nfree, 1, __ATOMIC_RELAXED);
+        v3d_free_t *e = &v3d_frees[n % V3D_FREES];
+        e->seq = __atomic_fetch_add(&v3d_seq, 1, __ATOMIC_RELAXED);
+        e->tag = f->tag;
+        e->start = f->start_pc;
+        e->size = f->size;
+        e->flags = f->flags;
+        e->ft_global = flushtime_global;
+        e->ft_self = (dcontext == GLOBAL_DCONTEXT) ? 0 : get_flushtime_last_update(dcontext);
+        e->tid = (dcontext == GLOBAL_DCONTEXT) ? 0 : dcontext->owning_thread;
+        e->nstubs = 0;
+        for (l = FRAGMENT_EXIT_STUBS(f); l != NULL; l = LINKSTUB_NEXT_EXIT(l)) {
+            if (LINKSTUB_DIRECT(l->flags) && TEST(LINK_SEPARATE_STUB, l->flags) &&
+                EXIT_STUB_PC(dcontext, f, l) != NULL) {
+                if (e->nstubs < V3D_STUBS)
+                    e->stub[e->nstubs] = EXIT_STUB_PC(dcontext, f, l);
+                e->nstubs++;
+            }
+        }
+    }
 
     linkstub_free_exitstubs(dcontext, f);
 
@@ -5393,6 +5421,7 @@ void
 set_flushtime_last_update(dcontext_t *dcontext, uint val)
 {
     per_thread_t *pt = (per_thread_t *)dcontext->fragment_field;
+    v3d_log(dcontext, V3D_FLUSHTIME, 0, pt->flushtime_last_update, val, 0);
     pt->flushtime_last_update = val;
 }
 

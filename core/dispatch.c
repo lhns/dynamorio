@@ -53,6 +53,7 @@
 #include "emit.h"
 #include "arch.h"
 #include "instrument.h"
+#include "v3diag.h"
 
 #ifdef DGC_DIAGNOSTICS
 #    include "instr.h"
@@ -164,6 +165,8 @@ d_r_dispatch(dcontext_t *dcontext)
 #    endif
 #endif
 
+    v3d_log(dcontext, V3D_DISPATCH, dcontext->whereami, (ptr_uint_t)dcontext->last_exit,
+            (ptr_uint_t)dcontext->next_tag, (ptr_uint_t)dcontext->last_fragment);
     dispatch_enter_dynamorio(dcontext);
     LOG(THREAD, LOG_INTERP, 2, "\nd_r_dispatch: target = " PFX "\n", dcontext->next_tag);
 
@@ -366,6 +369,8 @@ dispatch_enter_fcache(dcontext_t *dcontext, fragment_t *targetf)
 {
     fcache_enter_func_t fcache_enter;
     ASSERT(targetf != NULL);
+    v3d_log(dcontext, V3D_ENTER, get_flushtime_last_update(dcontext),
+            (ptr_uint_t)targetf->tag, (ptr_uint_t)targetf->start_pc, targetf->flags);
     /* ensure we don't take over when we should be going native */
     ASSERT(dcontext->native_exec_postsyscall == NULL);
 
