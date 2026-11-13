@@ -299,6 +299,10 @@ get_app_segment_base(uint seg);
 bool
 os_tls_calloc(DR_PARAM_OUT uint *offset, uint num_slots, uint alignment);
 
+/* Where client TLS starts and which slots are taken: code that names them depends on it. */
+void
+os_tls_client_layout(DR_PARAM_OUT uint *first_offset, DR_PARAM_OUT uint64 *in_use);
+
 bool
 os_tls_cfree(uint offset, uint num_slots);
 
