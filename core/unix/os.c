@@ -2626,6 +2626,19 @@ os_tls_calloc(DR_PARAM_OUT uint *offset, uint num_slots, uint alignment)
     return res;
 }
 
+void
+os_tls_client_layout(DR_PARAM_OUT uint *first_offset, DR_PARAM_OUT uint64 *in_use)
+{
+    *first_offset = offsetof(os_local_state_t, client_tls);
+    *in_use = 0;
+    d_r_mutex_lock(&client_tls_lock);
+    for (uint i = 0; i < MAX_NUM_CLIENT_TLS && i < 64; i++) {
+        if (client_tls_allocated[i])
+            *in_use |= 1ULL << i;
+    }
+    d_r_mutex_unlock(&client_tls_lock);
+}
+
 bool
 os_tls_cfree(uint offset, uint num_slots)
 {
