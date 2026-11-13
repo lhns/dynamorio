@@ -45,6 +45,7 @@
 #include "memquery.h"
 #include "os_private.h"
 #include "module_private.h"
+#include "include/syscall.h"
 #include <sys/mman.h>
 #include <errno.h>
 
@@ -442,11 +443,11 @@ memquery_from_procmap_query(const byte *pc, DR_PARAM_OUT dr_mem_info_t *info)
     if (q.vma_name_size == 0)
         comment_buf_scratch[0] = '\0';
     comment_buf_scratch[BUFSIZE - 1] = '\0';
-    if (TEST(PROCMAP_QUERY_VMA_READABLE, q.vma_flags))
+    if (TESTANY(PROCMAP_QUERY_VMA_READABLE, q.vma_flags))
         prot |= MEMPROT_READ;
-    if (TEST(PROCMAP_QUERY_VMA_WRITABLE, q.vma_flags))
+    if (TESTANY(PROCMAP_QUERY_VMA_WRITABLE, q.vma_flags))
         prot |= MEMPROT_WRITE;
-    if (TEST(PROCMAP_QUERY_VMA_EXECUTABLE, q.vma_flags))
+    if (TESTANY(PROCMAP_QUERY_VMA_EXECUTABLE, q.vma_flags))
         prot |= MEMPROT_EXEC;
 #ifdef ANDROID
     /* As memquery_iterator_next(). */
