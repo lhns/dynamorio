@@ -181,6 +181,11 @@ rel32_reachable_from_vmcode(byte *target);
  */
 bool
 rel32_reachable_from_current_vmcode(byte *target);
+/* As rel32_reachable_from_vmcode(), and also from wherever -vm_max_offset could have put
+ * vmcode: the same answer in every run, which the translation cache needs.
+ */
+bool
+rel32_reachable_from_any_vmcode_offset(byte *target);
 
 /* heap management */
 void

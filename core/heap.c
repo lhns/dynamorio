@@ -455,6 +455,8 @@ vmcode_is_reachable(void)
 #ifdef X64
 /* designates the closed interval within which we must allocate DR heap space */
 static byte *heap_allowable_region_start = (byte *)PTR_UINT_0;
+/* Whether vmcode was placed at -vm_base plus a random offset up to -vm_max_offset. */
+static bool vmcode_at_random_base;
 static byte *heap_allowable_region_end = (byte *)POINTER_MAX;
 
 /* Standalone library mode has no code cache, so it does not need 32-bit
@@ -902,6 +904,8 @@ vmm_place_vmcode(vm_heap_t *vmh, /*INOUT*/ size_t *size, heap_error_code_t *erro
             vmh->alloc_start =
                 os_heap_reserve((void *)preferred, *size, error_code, true /*+x*/);
             vmh->start_addr = vmh->alloc_start;
+            if (preferred != 0 && vmh->start_addr == (heap_pc)preferred)
+                vmcode_at_random_base = true;
             LOG(GLOBAL, LOG_HEAP, 1,
                 "vmm_heap_unit_init preferred=" PFX " size=" PIFX " => start_addr=" PFX
                 " (code=0x%08x)\n",
@@ -1359,6 +1363,24 @@ rel32_reachable_from_vmcode(byte *tgt)
     ASSERT(vmcode_get_end() <= heap_allowable_region_end + 1 /*closed*/ ||
            !DYNAMO_OPTION(vm_reserve));
     return REL32_REACHABLE_OFFS(new_offs);
+#else
+    return true;
+#endif
+}
+
+bool
+rel32_reachable_from_any_vmcode_offset(byte *tgt)
+{
+#ifdef X64
+    if (!rel32_reachable_from_vmcode(tgt))
+        return false;
+    if (!vmcode_at_random_base)
+        return true;
+    /* Every placement the random offset allows lies in [lo, hi). */
+    byte *lo = (byte *)DYNAMO_OPTION(vm_base);
+    byte *hi = lo + DYNAMO_OPTION(vm_max_offset) + (vmcode_get_end() - vmcode_get_start());
+    ptr_int_t a = tgt > lo ? tgt - lo : lo - tgt, b = tgt > hi ? tgt - hi : hi - tgt;
+    return REL32_REACHABLE_OFFS(a) && REL32_REACHABLE_OFFS(b);
 #else
     return true;
 #endif

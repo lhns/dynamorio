@@ -2559,6 +2559,19 @@ PC_OPTION_DEFAULT(bool, coarse_split_riprel, false,
 OPTION_DEFAULT(bool, persist_trust_textrel, true,
                "if textrel flag is not set, assume module has no text relocs")
 #endif
+/* Translation cache across runs (core/pcache.c), unrelated to -persist. */
+OPTION_DEFAULT(pathstring_t, pcache_dir, EMPTY_STRING,
+               "directory of the translation cache: <dir>/<app>.pcache")
+OPTION_DEFAULT(uint, pcache_mode, 0, "translation cache: 0 off, 1 read, 2 write")
+OPTION_DEFAULT(uint, pcache_verify, 0,
+               "translation cache: translate every hit fresh and compare; 1 exits 86 on "
+               "a mismatch, 2 only reports")
+OPTION_DEFAULT(uint, pcache_stats, 0, "translation cache: 1 prints counts at exit, 2 also the key")
+OPTION_DEFAULT(uint_size, pcache_max_size, 512 * 1024 * 1024,
+               "translation cache: the largest file written or read")
+OPTION_DEFAULT(bool, stable_reach, false,
+               "keep rip-relative app references only if they reach from any vmcode placement "
+               "-vm_max_offset allows, so translations do not depend on the random offset")
 /* the DYNAMORIO_VAR_PERSCACHE_ROOT config var takes precedence over this */
 OPTION_DEFAULT(pathstring_t, persist_dir, EMPTY_STRING,
                "base per-user directory for persistent caches")

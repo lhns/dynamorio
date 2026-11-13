@@ -2628,6 +2628,14 @@ mangle_exit_cti_prefixes(dcontext_t *dcontext, instr_t *instr)
 /* Should return NULL if it destroy "instr".  We don't support both destroying
  * (done only for x86: i#393) and changing next_instr (done only for ARM).
  */
+/* -stable_reach: the choice must not depend on vmcode's random offset (core/pcache.c). */
+static bool
+rip_rel_reaches(app_pc tgt)
+{
+    return DYNAMO_OPTION(stable_reach) ? rel32_reachable_from_any_vmcode_offset(tgt)
+                                       : rel32_reachable_from_vmcode(tgt);
+}
+
 instr_t *
 mangle_rel_addr(dcontext_t *dcontext, instrlist_t *ilist, instr_t *instr,
                 instr_t *next_instr)
@@ -2647,7 +2655,7 @@ mangle_rel_addr(dcontext_t *dcontext, instrlist_t *ilist, instr_t *instr,
 #    endif
     if (opc == OP_lea) {
         /* We leave this as rip-rel if it still reaches from the code cache. */
-        if (!rel32_reachable_from_vmcode(tgt)) {
+        if (!rip_rel_reaches(tgt)) {
             /* segment overrides are ignored on lea */
             opnd_t immed;
             dst = instr_get_dst(instr, 0);
@@ -2690,7 +2698,7 @@ mangle_rel_addr(dcontext_t *dcontext, instrlist_t *ilist, instr_t *instr,
          * heap (assumed to be a single heap: xref PR 215395, and xref
          * potential secondary code caches PR 253446.
          */
-        if (!rel32_reachable_from_vmcode(tgt)) {
+        if (!rip_rel_reaches(tgt)) {
             int si = -1, di = -1;
             opnd_t relop, newop;
             bool spill = true;
