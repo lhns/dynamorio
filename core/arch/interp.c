@@ -65,6 +65,7 @@
 #include "../perscache.h"
 #include "../native_exec.h"
 #include "../jit_opt.h"
+#include "../pcache.h"
 
 #ifdef CHECK_RETURNS_SSE2
 #    include <setjmp.h> /* for warning when see libc setjmp */
@@ -5119,6 +5120,12 @@ build_basic_block_fragment(dcontext_t *dcontext, app_pc start, uint initial_flag
     build_bb_t bb;
     dr_where_am_i_t wherewasi = dcontext->whereami;
     bool image_entry;
+    const pcache_hit_t *pc_hit = NULL;
+    pcache_ref_t *pc_snap = NULL;
+    instrlist_t *pc_ilist = NULL, *pc_fresh = NULL;
+    uint pc_flags = 0, pc_fresh_flags = 0;
+    void *pc_vmlist = NULL;
+    bool avx512_before = d_r_is_avx512_code_in_use();
     KSTART(bb_building);
     dcontext->whereami = DR_WHERE_INTERP;
 
@@ -5140,7 +5147,30 @@ build_basic_block_fragment(dcontext_t *dcontext, app_pc start, uint initial_flag
         bb.record_translation = false;
         build_native_exec_bb(dcontext, &bb);
     } else {
-        build_bb_ilist(dcontext, &bb);
+        /* Lab translation cache: a hit replaces decode, client and mangling. */
+        if (pcache_reading() && !for_trace && unmangled_ilist == NULL && link && visible) {
+            pc_hit = pcache_lookup(dcontext, start, initial_flags, avx512_before, &pc_ilist,
+                                   &pc_flags, &pc_vmlist);
+        }
+        if (pc_hit == NULL || pcache_verifying())
+            build_bb_ilist(dcontext, &bb);
+        if (pc_hit != NULL && (dcontext->bb_build_info == NULL || bb.native_exec)) {
+            instrlist_clear_and_destroy(dcontext, pc_ilist);
+            vm_area_destroy_list(dcontext, pc_vmlist);
+            pc_hit = NULL;
+        }
+        if (pc_hit != NULL) {
+            /* In verify mode the fresh list is compared after the hit is emitted. */
+            if (bb.ilist != NULL) {
+                pc_fresh = bb.ilist;
+                pc_fresh_flags = bb.flags;
+                if (bb.vmlist != NULL)
+                    vm_area_destroy_list(dcontext, bb.vmlist);
+            }
+            bb.ilist = pc_ilist;
+            bb.flags = pc_flags;
+            bb.vmlist = pc_vmlist;
+        }
         if (dcontext->bb_build_info == NULL) { /* going native */
             f = NULL;
             goto build_basic_block_fragment_done;
@@ -5175,7 +5205,18 @@ build_basic_block_fragment(dcontext_t *dcontext, app_pc start, uint initial_flag
 
     /* emit fragment into fcache */
     KSTART(bb_emit);
+    if (pc_hit == NULL && pcache_writing() && !for_trace && unmangled_ilist == NULL &&
+        link && visible) {
+        pc_snap = pcache_snapshot(dcontext, start, bb.end_pc, initial_flags, avx512_before,
+                                  bb.flags, bb.ilist);
+    }
     f = emit_fragment_ex(dcontext, start, bb.ilist, bb.flags, bb.vmlist, link, visible);
+    if (pc_snap != NULL)
+        pcache_record(dcontext, pc_snap, bb.ilist, f);
+    if (pc_fresh != NULL) {
+        pcache_verify(dcontext, pc_hit, f, bb.ilist, pc_fresh, pc_fresh_flags);
+        instrlist_clear_and_destroy(dcontext, pc_fresh);
+    }
     KSTOP(bb_emit);
 
 #ifdef CUSTOM_TRACES_RET_REMOVAL
