@@ -2559,6 +2559,14 @@ PC_OPTION_DEFAULT(bool, coarse_split_riprel, false,
 OPTION_DEFAULT(bool, persist_trust_textrel, true,
                "if textrel flag is not set, assume module has no text relocs")
 #endif
+/* Lab-only translation cache prototype (core/pcache.c). */
+OPTION_DEFAULT(pathstring_t, pcache_dir, EMPTY_STRING,
+               "directory of the lab translation cache: <dir>/<app>.pcache")
+OPTION_DEFAULT(uint, pcache_mode, 0, "lab translation cache: 0 off, 1 read, 2 write")
+OPTION_DEFAULT(uint, pcache_verify, 0,
+               "lab translation cache: translate every hit fresh and compare; 1 exits 86 on "
+               "a mismatch, 2 only reports")
+OPTION_DEFAULT(uint, pcache_stats, 0, "lab translation cache: 1 prints counts at exit, 2 also the key")
 /* the DYNAMORIO_VAR_PERSCACHE_ROOT config var takes precedence over this */
 OPTION_DEFAULT(pathstring_t, persist_dir, EMPTY_STRING,
                "base per-user directory for persistent caches")
