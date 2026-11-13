@@ -458,20 +458,16 @@ memquery_from_procmap_query(const byte *pc, DR_PARAM_OUT dr_mem_info_t *info)
     return true;
 }
 
-bool
-memquery_from_os(const byte *pc, DR_PARAM_OUT dr_mem_info_t *info,
-                 DR_PARAM_OUT bool *have_type)
+static bool
+memquery_walk_only(const byte *pc, DR_PARAM_OUT dr_mem_info_t *info,
+                   DR_PARAM_OUT bool *have_type)
 {
     memquery_iter_t iter;
     app_pc last_end = NULL;
     app_pc next_start = (app_pc)POINTER_MAX;
     bool found;
     ASSERT(info != NULL);
-    d_r_mutex_lock(&memory_info_buf_lock);
-    found = memquery_from_procmap_query(pc, info);
-    d_r_mutex_unlock(&memory_info_buf_lock);
-    if (found)
-        return true;
+    found = false;
     memquery_iterator_start(&iter, (app_pc)pc, false /*won't alloc*/);
     while (memquery_iterator_next(&iter)) {
         if (pc >= iter.vm_start && pc < iter.vm_end) {
@@ -494,4 +490,101 @@ memquery_from_os(const byte *pc, DR_PARAM_OUT dr_mem_info_t *info,
         *have_type = true;
     }
     return true;
+}
+
+/* LAB ONLY: both paths on every query; counts printed at exit. */
+static volatile uint labv_calls, labv_hit, labv_enoent, labv_cmp, labv_mismatch, labv_race,
+    labv_enoent_found;
+
+static bool
+labv_same(dr_mem_info_t *a, dr_mem_info_t *b)
+{
+    return a->base_pc == b->base_pc && a->size == b->size && a->prot == b->prot;
+}
+
+static bool
+labv_procmap(const byte *pc, dr_mem_info_t *info)
+{
+    bool f;
+    d_r_mutex_lock(&memory_info_buf_lock);
+    f = memquery_from_procmap_query(pc, info);
+    d_r_mutex_unlock(&memory_info_buf_lock);
+    return f;
+}
+
+bool
+memquery_from_os(const byte *pc, DR_PARAM_OUT dr_mem_info_t *info,
+                 DR_PARAM_OUT bool *have_type)
+{
+    dr_mem_info_t p1, p2, w;
+    bool wtype = false, f1, f2, wfound, bad;
+    labv_calls++;
+    f1 = labv_procmap(pc, &p1);
+    memquery_walk_only(pc, &w, &wtype);
+    wfound = !wtype;
+    if (f1) {
+        labv_hit++;
+        labv_cmp++;
+        bad = !wfound || !labv_same(&p1, &w);
+    } else {
+        if (!procmap_query_unavailable)
+            labv_enoent++;
+        bad = wfound && !procmap_query_unavailable;
+    }
+    if (bad) {
+        f2 = labv_procmap(pc, &p2);
+        if (f2 == f1 && (!f1 || labv_same(&p1, &p2))) {
+            if (f1)
+                labv_mismatch++;
+            else
+                labv_enoent_found++;
+            if (labv_mismatch + labv_enoent_found <= 40) {
+                print_file(STDERR,
+                           "LABV diff pc " PFX " ioctl %d " PFX "-" PFX " prot 0x%x walk "
+                           "%d " PFX "-" PFX " prot 0x%x name '%s'
+",
+                           pc, f1, f1 ? p1.base_pc : 0, f1 ? p1.base_pc + p1.size : 0,
+                           f1 ? p1.prot : 0, wfound, w.base_pc, w.base_pc + w.size, w.prot,
+                           comment_buf_scratch);
+            }
+        } else
+            labv_race++;
+    }
+    if (f1) {
+        *info = p1;
+        return true;
+    }
+    *info = w;
+    *have_type = wtype;
+    return true;
+}
+
+void
+labv_dump(void); /* LAB ONLY */
+#define LABV_MAX 4096
+static app_pc labv_addr[LABV_MAX];
+void
+labv_dump(void)
+{
+    memquery_iter_t iter;
+    uint n = 0, i, before = labv_mismatch + labv_enoent_found;
+    dr_mem_info_t info;
+    bool t;
+    /* Sweep: each mapping's first and last byte and the byte after it (often free). */
+    memquery_iterator_start(&iter, NULL, true);
+    while (memquery_iterator_next(&iter) && n + 3 <= LABV_MAX) {
+        labv_addr[n++] = iter.vm_start;
+        labv_addr[n++] = iter.vm_end - 1;
+        labv_addr[n++] = iter.vm_end;
+    }
+    memquery_iterator_stop(&iter);
+    for (i = 0; i < n; i++)
+        memquery_from_os(labv_addr[i], &info, &t);
+    print_file(STDERR,
+               "LABV pid %d calls %u hit %u enoent %u unavailable %d compared %u "
+               "mismatch %u enoent_but_walk_found %u race %u sweep %u sweep_diffs %u
+",
+               get_process_id(), labv_calls, labv_hit, labv_enoent,
+               procmap_query_unavailable, labv_cmp, labv_mismatch, labv_enoent_found,
+               labv_race, n, labv_mismatch + labv_enoent_found - before);
 }
