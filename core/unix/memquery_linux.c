@@ -46,6 +46,7 @@
 #include "os_private.h"
 #include "module_private.h"
 #include <sys/mman.h>
+#include <errno.h>
 
 #ifndef LINUX
 #    error Linux-only
@@ -108,6 +109,34 @@ static char comment_buf_scratch[BUFSIZE];
 static char buf_iter[BUFSIZE];
 static char comment_buf_iter[BUFSIZE];
 
+/* PROCMAP_QUERY (Linux 6.11+, include/uapi/linux/fs.h) returns the mapping containing an
+ * address without generating the whole maps file.  Defined here as older headers lack it.
+ */
+typedef struct _procmap_query_t {
+    uint64 size;
+    uint64 query_flags;
+    uint64 query_addr;
+    uint64 vma_start;
+    uint64 vma_end;
+    uint64 vma_flags;
+    uint64 vma_page_size;
+    uint64 vma_offset;
+    uint64 inode;
+    uint dev_major;
+    uint dev_minor;
+    uint vma_name_size;
+    uint build_id_size;
+    uint64 vma_name_addr;
+    uint64 build_id_addr;
+} procmap_query_t;
+/* _IOWR('f', 17, procmap_query_t) */
+#define PROCMAP_QUERY (0xc0006611 | (sizeof(procmap_query_t) << 16))
+#define PROCMAP_QUERY_VMA_READABLE 0x01
+#define PROCMAP_QUERY_VMA_WRITABLE 0x02
+#define PROCMAP_QUERY_VMA_EXECUTABLE 0x04
+/* Set once the ioctl is known not to work here (older kernel, seccomp). */
+static bool procmap_query_unavailable;
+
 void
 memquery_init(void)
 {
@@ -115,6 +144,7 @@ memquery_init(void)
      * in privload_early_inject() will have to be re-evaluated.
      */
     ASSERT(sizeof(maps_iter_t) <= MEMQUERY_INTERNAL_DATA_LEN);
+    ASSERT(sizeof(procmap_query_t) == 104);
 }
 
 void
@@ -140,10 +170,22 @@ memquery_from_os_will_block(void)
 #endif
 }
 
+static file_t
+open_maps_file(void)
+{
+    char maps_name[24]; /* should only need 16 for 5-digit tid */
+    /* We need the maps for our thread id, not process id.
+     * "/proc/self/maps" uses pid which fails if primary thread in group
+     * has exited.
+     */
+    snprintf(maps_name, BUFFER_SIZE_ELEMENTS(maps_name), "/proc/%d/maps",
+             d_r_get_thread_id());
+    return os_open(maps_name, OS_OPEN_READ);
+}
+
 bool
 memquery_iterator_start(memquery_iter_t *iter, app_pc start, bool may_alloc)
 {
-    char maps_name[24]; /* should only need 16 for 5-digit tid */
     maps_iter_t *mi = (maps_iter_t *)&iter->internal;
 
     /* Don't assign the local ptrs until the lock is grabbed to make
@@ -158,13 +200,7 @@ memquery_iterator_start(memquery_iter_t *iter, app_pc start, bool may_alloc)
         mi->comment_buffer = (char *)&comment_buf_scratch;
     }
 
-    /* We need the maps for our thread id, not process id.
-     * "/proc/self/maps" uses pid which fails if primary thread in group
-     * has exited.
-     */
-    snprintf(maps_name, BUFFER_SIZE_ELEMENTS(maps_name), "/proc/%d/maps",
-             d_r_get_thread_id());
-    mi->maps = os_open(maps_name, OS_OPEN_READ);
+    mi->maps = open_maps_file();
     ASSERT(mi->maps != INVALID_FILE);
     mi->buf[BUFSIZE - 1] = '\0'; /* permanently */
 
@@ -340,6 +376,88 @@ memquery_library_bounds(const char *name, app_pc *start /*IN/OUT*/, app_pc *end 
  * QUERY
  */
 
+/* Fills info for the mapping [start, end) that contains pc, named as in the maps file. */
+static void
+memquery_fill_found(const byte *pc, app_pc start, app_pc end, uint prot, const char *name,
+                    DR_PARAM_OUT dr_mem_info_t *info)
+{
+    info->base_pc = start;
+    info->size = (end - start);
+    info->prot = prot;
+    /* On early (pre-Fedora 2) kernels the vsyscall page is listed
+     * with no permissions at all in the maps file.  Here's RHEL4:
+     *   ffffe000-fffff000 ---p 00000000 00:00 0
+     * We return "rx" as the permissions in that case.
+     */
+    if (vdso_page_start != NULL && pc >= vdso_page_start &&
+        pc < vdso_page_start + vdso_size) {
+        /* i#1583: recent kernels have 2-page vdso, which can be split into
+         * pieces by our vsyscall hook, so we don't check for a precise match.
+         */
+        info->prot = (MEMPROT_READ | MEMPROT_EXEC | MEMPROT_VDSO);
+    } else if (strncmp(name, VVAR_PAGE_MAPS_NAME_PREFIX,
+                       strlen(VVAR_PAGE_MAPS_NAME_PREFIX)) == 0) {
+        /* The VVAR pages were added in kernel 3.0 but not labeled until
+         * 3.15.  We document that we do not label prior to 3.15.
+         * DrMem#1778 seems to only happen on 3.19+ in any case.
+         */
+        info->prot |= MEMPROT_VDSO;
+    }
+}
+
+/* Answers memquery_from_os() for a pc inside a mapping with the PROCMAP_QUERY ioctl.
+ * Returns false when pc is in no mapping or the ioctl fails: the caller then walks the
+ * maps file, which also gives a free region's bounds and the [vsyscall] gate area.
+ * Caller holds memory_info_buf_lock (for comment_buf_scratch).
+ */
+static bool
+memquery_from_procmap_query(const byte *pc, DR_PARAM_OUT dr_mem_info_t *info)
+{
+    procmap_query_t q;
+    ptr_int_t res;
+    uint prot = 0;
+    file_t maps;
+    ASSERT(OWN_MUTEX(&memory_info_buf_lock));
+    if (procmap_query_unavailable)
+        return false;
+    maps = open_maps_file();
+    if (maps == INVALID_FILE)
+        return false;
+    memset(&q, 0, sizeof(q));
+    q.size = sizeof(q);
+    q.query_addr = (ptr_uint_t)pc;
+    q.vma_name_addr = (ptr_uint_t)comment_buf_scratch;
+    q.vma_name_size = BUFSIZE;
+    res = dynamorio_syscall(SYS_ioctl, 3, maps, PROCMAP_QUERY, &q);
+    os_close(maps);
+    if (res == -ENOTTY || res == -EINVAL || res == -ENOSYS || res == -EPERM ||
+        res == -EACCES) {
+        procmap_query_unavailable = true;
+        return false;
+    }
+    /* -ENOENT: no mapping contains pc. */
+    if (res != 0)
+        return false;
+    /* An anonymous mapping without a name returns no name. */
+    if (q.vma_name_size == 0)
+        comment_buf_scratch[0] = '\0';
+    comment_buf_scratch[BUFSIZE - 1] = '\0';
+    if (TEST(PROCMAP_QUERY_VMA_READABLE, q.vma_flags))
+        prot |= MEMPROT_READ;
+    if (TEST(PROCMAP_QUERY_VMA_WRITABLE, q.vma_flags))
+        prot |= MEMPROT_WRITE;
+    if (TEST(PROCMAP_QUERY_VMA_EXECUTABLE, q.vma_flags))
+        prot |= MEMPROT_EXEC;
+#ifdef ANDROID
+    /* As memquery_iterator_next(). */
+    if (comment_buf_scratch[0] != '\0')
+        prot |= MEMPROT_HAS_COMMENT;
+#endif
+    memquery_fill_found(pc, (app_pc)(ptr_uint_t)q.vma_start,
+                        (app_pc)(ptr_uint_t)q.vma_end, prot, comment_buf_scratch, info);
+    return true;
+}
+
 bool
 memquery_from_os(const byte *pc, DR_PARAM_OUT dr_mem_info_t *info,
                  DR_PARAM_OUT bool *have_type)
@@ -347,33 +465,18 @@ memquery_from_os(const byte *pc, DR_PARAM_OUT dr_mem_info_t *info,
     memquery_iter_t iter;
     app_pc last_end = NULL;
     app_pc next_start = (app_pc)POINTER_MAX;
-    bool found = false;
+    bool found;
     ASSERT(info != NULL);
+    d_r_mutex_lock(&memory_info_buf_lock);
+    found = memquery_from_procmap_query(pc, info);
+    d_r_mutex_unlock(&memory_info_buf_lock);
+    if (found)
+        return true;
     memquery_iterator_start(&iter, (app_pc)pc, false /*won't alloc*/);
     while (memquery_iterator_next(&iter)) {
         if (pc >= iter.vm_start && pc < iter.vm_end) {
-            info->base_pc = iter.vm_start;
-            info->size = (iter.vm_end - iter.vm_start);
-            info->prot = iter.prot;
-            /* On early (pre-Fedora 2) kernels the vsyscall page is listed
-             * with no permissions at all in the maps file.  Here's RHEL4:
-             *   ffffe000-fffff000 ---p 00000000 00:00 0
-             * We return "rx" as the permissions in that case.
-             */
-            if (vdso_page_start != NULL && pc >= vdso_page_start &&
-                pc < vdso_page_start + vdso_size) {
-                /* i#1583: recent kernels have 2-page vdso, which can be split into
-                 * pieces by our vsyscall hook, so we don't check for a precise match.
-                 */
-                info->prot = (MEMPROT_READ | MEMPROT_EXEC | MEMPROT_VDSO);
-            } else if (strncmp(iter.comment, VVAR_PAGE_MAPS_NAME_PREFIX,
-                               strlen(VVAR_PAGE_MAPS_NAME_PREFIX)) == 0) {
-                /* The VVAR pages were added in kernel 3.0 but not labeled until
-                 * 3.15.  We document that we do not label prior to 3.15.
-                 * DrMem#1778 seems to only happen on 3.19+ in any case.
-                 */
-                info->prot |= MEMPROT_VDSO;
-            }
+            memquery_fill_found(pc, iter.vm_start, iter.vm_end, iter.prot, iter.comment,
+                                info);
             found = true;
             break;
         } else if (pc < iter.vm_start) {
