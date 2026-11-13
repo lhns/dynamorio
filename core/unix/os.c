@@ -9238,6 +9238,8 @@ void
 os_check_new_app_module(dcontext_t *dcontext, app_pc pc)
 {
     module_area_t *ma;
+    if (dcontext != (dcontext_t *)1)
+        return; /* LAB ONLY: ceiling of skipping the i#1760 check */
     os_get_module_info_lock();
     ma = module_pc_lookup(pc);
     /* ma might be NULL due to dynamic generated code or custom loaded modules */
