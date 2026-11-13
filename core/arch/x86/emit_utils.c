@@ -2739,6 +2739,14 @@ emit_indirect_branch_lookup(dcontext_t *dcontext, generated_code_t *code, byte *
      */
     /*>>>    SAVE_TO_UPCONTEXT %xbx,xbx_OFFSET                       */
     APP(&ilist, target_delete_entry);
+    /* The tag the hit path matched, not the entry's: see IBL_HIT_TAG_SLOT. XCX, the
+     * entry pointer, is then dead and holds the linkstub below instead of XBX.
+     */
+    bool tag_in_tls = ibl_use_target_prefix(ibl_code) &&
+        IBL_HIT_SAVES_TAG(absolute, only_spill_state_in_tls);
+    IF_X64(reg_id_t linkstub_reg = tag_in_tls ? SCRATCH_REG2 : SCRATCH_REG1;)
+    if (tag_in_tls)
+        APP(&ilist, RESTORE_FROM_TLS(dcontext, SCRATCH_REG1, IBL_HIT_TAG_SLOT));
 
     if (linkstub == NULL) {
         /* If coming from an inlined ibl, the linkstub was not stored, so
@@ -2751,10 +2759,9 @@ emit_indirect_branch_lookup(dcontext_t *dcontext, generated_code_t *code, byte *
          * to get here, since we only add bbs to traces).
          */
 #ifdef X64
-        /* xbx is now dead so we can use it */
         APP(&ilist,
             INSTR_CREATE_mov_imm(
-                dcontext, opnd_create_reg(SCRATCH_REG1),
+                dcontext, opnd_create_reg(linkstub_reg),
                 OPND_CREATE_INTPTR((ptr_int_t)get_ibl_deleted_linkstub())));
 #endif
         if (absolute) {
@@ -2767,7 +2774,7 @@ emit_indirect_branch_lookup(dcontext_t *dcontext, generated_code_t *code, byte *
                 XINST_CREATE_store(
                     dcontext, OPND_TLS_FIELD(TLS_REG3_SLOT),
                     IF_X64_ELSE(
-                        opnd_create_reg(SCRATCH_REG1),
+                        opnd_create_reg(linkstub_reg),
                         OPND_CREATE_INTPTR((ptr_int_t)get_ibl_deleted_linkstub()))));
         } else {
             /* doesn't touch xbx */
@@ -2803,7 +2810,7 @@ emit_indirect_branch_lookup(dcontext_t *dcontext, generated_code_t *code, byte *
             insert_save_eflags(dcontext, &ilist, NULL, 0, IBL_EFLAGS_IN_TLS(),
                                absolute _IF_X64(x86_to_x64_ibl_opt));
         }
-    } else {
+    } else if (!tag_in_tls) {
         APP(&ilist,
             XINST_CREATE_load(dcontext, opnd_create_reg(SCRATCH_REG1),
                               OPND_CREATE_MEMPTR(SCRATCH_REG2, FRAGMENT_TAG_OFFS)));
