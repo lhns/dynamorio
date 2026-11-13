@@ -1572,6 +1572,12 @@ end_and_emit_trace(dcontext_t *dcontext, fragment_t *cur_f)
         ASSERT(!TESTANY(FRAG_TRACE_BUILDING, trace_head_f->flags));
 #endif
 
+    /* The removals above can go nolinking, where this thread signs off on pending
+     * deletions: a flush in that window can free trace_f, and dispatch's
+     * was_I_flushed check no longer catches it once this thread is up to date.
+     */
+    trace_f = fragment_lookup(dcontext, tag);
+
 end_and_emit_trace_return:
     if (cur_f == NULL && cur_f_tag == tag)
         return trace_f;
