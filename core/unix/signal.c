@@ -5270,6 +5270,35 @@ record_pending_signal(dcontext_t *dcontext, int sig, kernel_ucontext_t *ucxt,
         ASSERT(!forged);
         xl8_success =
             translate_sigcontext(dcontext, ucxt, !can_always_delay[sig], &f, &wrapper);
+        if (!can_always_delay[sig]) { /* LAB ONLY: is the translated pc a sane faulting instruction? */
+            static int v3x_n;
+            app_pc apc = (app_pc)sc->SC_XIP;
+            byte ab[48] = { 0 }, rb[16] = { 0 };
+            d_r_safe_read(apc - 16, sizeof(ab), ab);
+            d_r_safe_read((byte *)sc_orig.SC_XIP, sizeof(rb), rb);
+            instr_t in;
+            instr_init(dcontext, &in);
+            byte *nx = decode_from_copy(dcontext, ab + 16, apc, &in);
+            bool valid = nx != NULL && instr_valid(&in);
+            bool mem = valid && (instr_reads_memory(&in) || instr_writes_memory(&in));
+            bool bad = !valid || ((sig == SIGSEGV || sig == SIGBUS) && !mem);
+            if (bad && v3x_n++ < 50) {
+                print_file(STDERR,
+                           "<V3XL sig=%d raw=%p app=%p ok=%d valid=%d mem=%d tag=%p start=%p "
+                           "flags=%#x addr=%p>\n",
+                           sig, (void *)sc_orig.SC_XIP, apc, xl8_success, valid, mem,
+                           f == NULL ? NULL : f->tag, f == NULL ? NULL : f->start_pc,
+                           f == NULL ? 0 : f->flags, access_address);
+                print_file(STDERR, "<V3XL app-16..+32:");
+                for (int k = 0; k < 48; k++)
+                    print_file(STDERR, " %02x", ab[k]);
+                print_file(STDERR, ">\n<V3XL raw:");
+                for (int k = 0; k < 16; k++)
+                    print_file(STDERR, " %02x", rb[k]);
+                print_file(STDERR, ">\n");
+            }
+            instr_free(dcontext, &in);
+        }
 
         if (can_always_delay[sig] && !xl8_success) {
             /* delay: we expect this for coarse fragments if alarm arrives
