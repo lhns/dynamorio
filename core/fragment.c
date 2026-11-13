@@ -2557,7 +2557,7 @@ fragment_free(dcontext_t *dcontext, fragment_t *f)
      * which is assumed to have been called prior to fragment_free
      */
 
-    if (TEST(FRAG_SHARED, f->flags)) { /* LAB ONLY: ledger of freed shared fragments */
+    if (TESTANY(FRAG_SHARED, f->flags)) { /* LAB ONLY: ledger of freed shared fragments */
         uint64 n = __atomic_fetch_add(&v3d_nfree, 1, __ATOMIC_RELAXED);
         v3d_free_t *e = &v3d_frees[n % V3D_FREES];
         e->seq = __atomic_fetch_add(&v3d_seq, 1, __ATOMIC_RELAXED);
@@ -2566,11 +2566,13 @@ fragment_free(dcontext_t *dcontext, fragment_t *f)
         e->size = f->size;
         e->flags = f->flags;
         e->ft_global = flushtime_global;
-        e->ft_self = (dcontext == GLOBAL_DCONTEXT) ? 0 : get_flushtime_last_update(dcontext);
+        e->ft_self = (dcontext == GLOBAL_DCONTEXT || dcontext->fragment_field == NULL)
+            ? 0
+            : get_flushtime_last_update(dcontext);
         e->tid = (dcontext == GLOBAL_DCONTEXT) ? 0 : dcontext->owning_thread;
         e->nstubs = 0;
         for (l = FRAGMENT_EXIT_STUBS(f); l != NULL; l = LINKSTUB_NEXT_EXIT(l)) {
-            if (LINKSTUB_DIRECT(l->flags) && TEST(LINK_SEPARATE_STUB, l->flags) &&
+            if (LINKSTUB_DIRECT(l->flags) && TESTANY(LINK_SEPARATE_STUB, l->flags) &&
                 EXIT_STUB_PC(dcontext, f, l) != NULL) {
                 if (e->nstubs < V3D_STUBS)
                     e->stub[e->nstubs] = EXIT_STUB_PC(dcontext, f, l);
