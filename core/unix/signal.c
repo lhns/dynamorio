@@ -4931,6 +4931,33 @@ find_next_fragment_from_gencode(dcontext_t *dcontext, sigcontext_t *sc)
     return f;
 }
 
+/* LAB ONLY: each thread's last synchronous faults, printed when the thread gets SIGABRT. */
+typedef struct {
+    int tid, sig;
+    void *raw, *app, *tag, *start, *addr;
+    uint flags;
+    byte ab[16];
+} v3f_t;
+#define V3F_T 1024
+#define V3F_N 8
+static v3f_t v3f[V3F_T][V3F_N];
+static uint v3f_pos[V3F_T];
+static void
+v3f_print(dcontext_t *dc)
+{
+    uint t = (uint)dc->owning_thread % V3F_T;
+    for (uint k = 0; k < V3F_N; k++) {
+        v3f_t *e = &v3f[t][(v3f_pos[t] + k) % V3F_N];
+        if (e->tid != (int)dc->owning_thread)
+            continue;
+        print_file(STDERR, "<V3F sig=%d raw=%p app=%p tag=%p start=%p flags=%#x addr=%p bytes=", e->sig,
+                   e->raw, e->app, e->tag, e->start, e->flags, e->addr);
+        for (int j = 0; j < 16; j++)
+            print_file(STDERR, "%02x", e->ab[j]);
+        print_file(STDERR, ">\n");
+    }
+}
+
 static void
 record_pending_signal(dcontext_t *dcontext, int sig, kernel_ucontext_t *ucxt,
                       sigframe_rt_t *frame, bool forged, byte *access_address)
@@ -5275,6 +5302,19 @@ record_pending_signal(dcontext_t *dcontext, int sig, kernel_ucontext_t *ucxt,
             app_pc apc = (app_pc)sc->SC_XIP;
             byte ab[48] = { 0 }, rb[16] = { 0 };
             d_r_safe_read(apc - 16, sizeof(ab), ab);
+            {
+                uint t = (uint)dcontext->owning_thread % V3F_T;
+                v3f_t *e = &v3f[t][v3f_pos[t]++ % V3F_N];
+                e->tid = (int)dcontext->owning_thread;
+                e->sig = sig;
+                e->raw = (void *)sc_orig.SC_XIP;
+                e->app = apc;
+                e->tag = f == NULL ? NULL : f->tag;
+                e->start = f == NULL ? NULL : f->start_pc;
+                e->flags = f == NULL ? 0 : f->flags;
+                e->addr = access_address;
+                memcpy(e->ab, ab + 16, 16);
+            }
             d_r_safe_read((byte *)sc_orig.SC_XIP, sizeof(rb), rb);
             instr_t in;
             instr_init(dcontext, &in);
@@ -5900,6 +5940,8 @@ main_signal_handler_C(byte *xsp)
          */
         exit_thread_syscall(1);
     }
+    if (sig == SIGABRT && dcontext != NULL && dcontext != GLOBAL_DCONTEXT)
+        v3f_print(dcontext);
     /* XXX: ensure the path for recording a pending signal does not grab any DR locks
      * that could have been interrupted
      * e.g., synchronize_dynamic_options grabs the stats_lock!
