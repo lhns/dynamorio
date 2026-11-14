@@ -419,6 +419,10 @@ set_default_signal_action(int sig);
 
 void
 signal_thread_inherit(dcontext_t *dcontext, void *clone_record);
+void
+signal_clone_block(dcontext_t *dcontext, void *clone_record);
+void
+signal_clone_unblock(dcontext_t *dcontext);
 
 dcontext_t *
 init_thread_with_shared_siginfo(priv_mcontext_t *mc, dcontext_t *takeover_dc);
