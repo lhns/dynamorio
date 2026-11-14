@@ -265,6 +265,13 @@ options_t temp_options;
  * section to ease bootstrapping issues
  */
 DECLARE_CXTSWPROT_VAR(read_write_lock_t options_lock, INIT_READWRITE_LOCK(options_lock));
+/* LAB ONLY: shift every data section by 48 bytes, code unchanged. */
+DECLARE_FREQPROT_VAR(volatile char v3pad_f[48], { 1 });
+DECLARE_CXTSWPROT_VAR(volatile char v3pad_c[48], { 1 });
+DECLARE_NEVERPROT_VAR(volatile char v3pad_n[48], { 1 });
+volatile char v3pad_d[48] = { 1 };
+volatile char v3pad_b[48];
+
 
 #else /* !NOT_DYNAMORIO_CORE ****************************************/
 #    define ASSERT_OWN_OPTIONS_LOCK(b, l)
