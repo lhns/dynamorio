@@ -674,6 +674,11 @@ add_library(dynamorio SHARED
   )
 
 configure_core_lib(dynamorio)
+if (UNIX AND X86)
+  # Hot dispatch code otherwise moves with the size of everything linked before it,
+  # and some layouts cost up to 50% on AMD Zen 4 under signal-heavy loads.
+  append_property_string(TARGET dynamorio COMPILE_FLAGS "-falign-functions=64")
+endif ()
 if (UNIX)
   # We need our own memcpy + memset for isolation.
   # They're separated out for sharing for i#1504.
