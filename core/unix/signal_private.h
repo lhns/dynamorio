@@ -442,6 +442,10 @@ typedef struct _thread_sig_info_t {
      */
     bool fully_initialized;
 
+    /* The real mask before a thread-creating clone blocked signals for the child. */
+    bool clone_mask_saved;
+    kernel_sigset_t clone_saved_mask;
+
     /* DR and clients use itimers, so we need to emulate the app's itimer
      * usage.  This info is shared across CLONE_THREAD threads only for
      * NPTL in kernel 2.6.12+ so these fields are separately shareable from

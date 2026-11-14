@@ -226,6 +226,11 @@ typedef struct _clone_record_t {
     thread_sig_info_t info;
     thread_sig_info_t *parent_info;
     void *pcprofile_info;
+    /* The child starts with signals blocked (signal_clone_block()) and sets this mask
+     * once it can take them.
+     */
+    bool start_blocked;
+    kernel_sigset_t start_mask;
 #if defined(AARCHXX) || defined(RISCV64)
     /* To ensure we have the right value as of the point of the clone, we
      * store it here (we'll have races if we try to get it during new thread
@@ -861,6 +866,7 @@ create_clone_record(dcontext_t *dcontext, reg_t *app_thread_xsp)
     LOG(THREAD, LOG_ASYNCH, 1, "allocated clone record: " PFX "\n", record);
 
     record->dstack = dstack;
+    record->start_blocked = false;
     record->caller_id = dcontext->owning_thread;
     record->clone_sysnum = dcontext->sys_num;
     record->info = *((thread_sig_info_t *)dcontext->signal_field);
@@ -1381,7 +1387,40 @@ signal_thread_inherit(dcontext_t *dcontext, void *clone_record)
 
     /* Assumed to be async safe. */
     info->fully_initialized = true;
+    /* A signal sent to this thread before now waited, blocked: with no handler state
+     * it would have taken the default action.
+     */
+    if (record != NULL && record->start_blocked) {
+        sigprocmask_syscall(SIG_SETMASK, &record->start_mask, NULL,
+                            sizeof(record->start_mask));
+    }
     DOLOG(4, LOG_ASYNCH, dump_unmasked(dcontext, __FUNCTION__););
+}
+
+/* Called before a thread-creating clone: the child inherits this thread's mask, so it
+ * starts with every signal but the crash and suspend ones blocked until its signal
+ * state exists. signal_clone_unblock() restores this thread's mask after the syscall.
+ */
+void
+signal_clone_block(dcontext_t *dcontext, void *clone_record)
+{
+    thread_sig_info_t *info = (thread_sig_info_t *)dcontext->signal_field;
+    clone_record_t *record = (clone_record_t *)clone_record;
+    block_all_noncrash_signals_except(&info->clone_saved_mask, 1, SUSPEND_SIGNAL);
+    info->clone_mask_saved = true;
+    record->start_mask = info->clone_saved_mask;
+    record->start_blocked = true;
+}
+
+void
+signal_clone_unblock(dcontext_t *dcontext)
+{
+    thread_sig_info_t *info = (thread_sig_info_t *)dcontext->signal_field;
+    if (info == NULL || !info->clone_mask_saved)
+        return;
+    info->clone_mask_saved = false;
+    sigprocmask_syscall(SIG_SETMASK, &info->clone_saved_mask, NULL,
+                        sizeof(info->clone_saved_mask));
 }
 
 /* When taking over existing app threads, we assume they're using pthreads and
