@@ -3004,6 +3004,7 @@ void
 os_clone_post(dcontext_t *dcontext)
 {
     os_swap_dr_tls(dcontext, false /*to DR*/);
+    signal_clone_unblock(dcontext);
 }
 
 byte *
@@ -7691,6 +7692,11 @@ handle_clone_pre(dcontext_t *dcontext)
         }
         if (TESTANY(CLONE_VFORK, flags))
             vfork_child_claim(dcontext, crec);
+        /* Not for vfork: an exit may abandon the parent there (os_thread_abandon_in_vfork()),
+         * and it then relies on getting a signal.
+         */
+        if (!TESTANY(CLONE_VFORK, flags))
+            signal_clone_block(dcontext, crec);
         os_clone_pre(dcontext);
         os_new_thread_pre();
     } else {
