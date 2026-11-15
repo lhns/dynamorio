@@ -165,7 +165,7 @@ bool can_always_delay[] = {
     /* SIGTTIN   21 */ true,
     /* SIGTTOU   22 */ true,
     /* SIGURG    23 */ true,
-    /* SIGXCPU   24 */ false,
+    /* SIGXCPU   24 */ true, /* only ever raised asynchronously: RLIMIT_CPU, F_SETSIG */
     /* SIGXFSZ   25 */ true,
     /* SIGVTALRM 26 */ true,
     /* SIGPROF   27 */ true,
