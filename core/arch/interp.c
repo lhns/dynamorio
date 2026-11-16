@@ -5164,9 +5164,10 @@ build_basic_block_fragment(dcontext_t *dcontext, app_pc start, uint initial_flag
             if (bb.ilist != NULL) {
                 pc_fresh = bb.ilist;
                 pc_fresh_flags = bb.flags;
-                if (bb.vmlist != NULL)
-                    vm_area_destroy_list(dcontext, bb.vmlist);
             }
+            /* Free what init_interp_build_bb filled; the cached list replaces it. */
+            if (bb.vmlist != NULL)
+                vm_area_destroy_list(dcontext, bb.vmlist);
             bb.ilist = pc_ilist;
             bb.flags = pc_flags;
             bb.vmlist = pc_vmlist;

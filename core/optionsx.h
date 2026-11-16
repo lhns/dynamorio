@@ -2564,8 +2564,8 @@ OPTION_DEFAULT(pathstring_t, pcache_dir, EMPTY_STRING,
                "directory of the translation cache: <dir>/<app>.pcache")
 OPTION_DEFAULT(uint, pcache_mode, 0, "translation cache: 0 off, 1 read, 2 write")
 OPTION_DEFAULT(uint, pcache_verify, 0,
-               "translation cache: translate every hit fresh and compare; 1 exits 86 on "
-               "a mismatch, 2 only reports")
+               "translation cache: translate every hit fresh and compare; 1 exits 88 on "
+               "a mismatch, 2 only reports it and keeps running the cached code (lab use)")
 OPTION_DEFAULT(uint, pcache_stats, 0, "translation cache: 1 prints counts at exit, 2 also the key")
 OPTION_DEFAULT(uint_size, pcache_max_size, 512 * 1024 * 1024,
                "translation cache: the largest file written or read")

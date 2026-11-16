@@ -39,7 +39,6 @@
 #include "disassemble.h"
 #include "pcache.h"
 #include <elf.h>
-#include <stddef.h>
 
 #define PC_MAGIC 0x3265686361637076ULL /* "vpcache2" */
 #define PC_VERSION 2
@@ -64,7 +63,7 @@ enum { V_MOD = 1, V_DR, V_PRIV, V_IBL, V_CCSAVE, V_CCRESTORE };
 /* Entry flags. */
 #define E_PIN 0x1 /* a 32-bit immediate holds a module address: same base only */
 
-/* On-disk layout; tools/pcache.py in v3compat reads and writes the same. Little-endian. */
+/* On-disk layout; test/pcache_tool.py in v3compat reads and writes the same. Little-endian. */
 typedef struct {
     uint64 magic;
     uint version;
@@ -339,7 +338,11 @@ compute_key(void)
     uint r[4];
     key_len = 0;
     key_add("v3pcache %d\n", PC_VERSION);
-    key_add("dr %llx\n", elf_identity(get_dynamorio_dll_start()));
+    uint64 id = elf_identity(get_dynamorio_dll_start());
+    key_add("dr %llx\n", id);
+    /* Without a build-id the header hash can't tell two builds of DR or a client apart. */
+    if ((id & 1) == 0)
+        key_len = sizeof(key);
     acquire_recursive_lock(&privload_lock);
     for (privmod_t *m = privload_first_module(); m != NULL; m = privload_next_module(m)) {
         if (m->externally_loaded)
@@ -351,7 +354,10 @@ compute_key(void)
         priv[npriv].base = m->base;
         priv[npriv].size = m->size;
         npriv++;
-        key_add("priv %s %llx %llx\n", m->name, elf_identity(m->base), (uint64)m->size);
+        id = elf_identity(m->base);
+        key_add("priv %s %llx %llx\n", m->name, id, (uint64)m->size);
+        if ((id & 1) == 0)
+            key_len = sizeof(key);
     }
     release_recursive_lock(&privload_lock);
     /* DR's TLS layout is part of its build; the client's raw TLS slots depend on its init. */
@@ -395,12 +401,14 @@ compute_key(void)
     }
 }
 
-static void
+/* False if the path was truncated. */
+static bool
 cache_path(char *buf, size_t len)
 {
-    snprintf(buf, len, "%s/%s.pcache", DYNAMO_OPTION(pcache_dir),
-             get_application_short_name());
+    int n = snprintf(buf, len, "%s/%s.pcache", DYNAMO_OPTION(pcache_dir),
+                     get_application_short_name());
     buf[len - 1] = '\0';
+    return n >= 0 && (size_t)n < len;
 }
 
 /* The file's structure, every offset bounded; NULL if it holds. */
@@ -474,8 +482,12 @@ init(void)
         spin_lock();
         if (!key_done) {
             mode = DYNAMO_OPTION(pcache_dir)[0] == '\0' ? 0 : (int)DYNAMO_OPTION(pcache_mode);
-            if (mode != 0)
+            if (mode != 0) {
+                char path[MAXIMUM_PATH];
                 compute_key();
+                if (!cache_path(path, sizeof(path)))
+                    mode = 0;
+            }
             if (key_len >= sizeof(key))
                 mode = 0;
             if (mode == 1)
@@ -766,7 +778,7 @@ build_ilist(dcontext_t *dcontext, const pc_entry_t *e, app_pc tag, app_pc mstart
         case R_REL: {
             NEED(SZ_REL_HDR);
             byte len = p[0], pos = p[1];
-            if (len == 0 || len > 17 || (uint)pos + 4 > len)
+            if (len == 0 || len > 15 || (uint)pos + 4 > len)
                 goto bad;
             NEED(SZ_REL_HDR + (size_t)len);
             if (!resolve(dcontext, p + 2, mstart, msize, &t))
@@ -1030,7 +1042,7 @@ pcache_verify(dcontext_t *dcontext, const pcache_hit_t *hit, fragment_t *f,
             if (!mask[at] && buf[at] != entry[at])
                 why = "bytes";
         }
-        if (why != NULL)
+        if (why != NULL && at > 0)
             at--;
     }
     if (why == NULL) {
@@ -1054,7 +1066,7 @@ pcache_verify(dcontext_t *dcontext, const pcache_hit_t *hit, fragment_t *f,
         }
     }
     if (DYNAMO_OPTION(pcache_verify) == 1)
-        os_terminate_with_code(dcontext, TERMINATE_PROCESS, 86);
+        os_terminate_with_code(dcontext, TERMINATE_PROCESS, 88);
 }
 
 /*************************************************************************
@@ -1222,7 +1234,7 @@ derive(app_pc a)
 }
 
 /* Every address an instruction of the block names: its pc and end, rip-relative and branch
- * targets. Decoded from the recorded copy of the bytes.
+ * targets. Decoded from the app's bytes at the tag.
  */
 static void
 derive_all(dcontext_t *dcontext, app_pc tag, const byte *src, uint len)
@@ -1696,6 +1708,10 @@ pcache_record(dcontext_t *dcontext, pcache_ref_t *s, instrlist_t *ilist, fragmen
                 memset(p, 0, SZ_RAW_HDR);
                 p += SZ_RAW_HDR;
             }
+            if ((uint)rd16(bundle) + len > 0xffff) {
+                ok = false;
+                break;
+            }
             memcpy(p, wpcs[j], len);
             p += len;
             ushort blen = rd16(bundle) + (ushort)len;
@@ -1713,7 +1729,7 @@ pcache_record(dcontext_t *dcontext, pcache_ref_t *s, instrlist_t *ilist, fragmen
         }
         case R_REL:
             len = instr_length(dcontext, si->in);
-            if (!target_value(dcontext, si->target, &v) || len > 17) {
+            if (!target_value(dcontext, si->target, &v) || len > 15) {
                 s_fail[F_REL]++;
                 ok = false;
                 break;
@@ -1886,10 +1902,13 @@ typedef struct {
     xstate_t x;
 } out_t;
 
+/* Not wbuf: pcache_record fills that under another lock while a thread may be exiting. */
+static byte obuf[1 << 16];
+
 static void
 out_flush(out_t *o)
 {
-    if (o->fill > 0 && o->f != INVALID_FILE && os_write(o->f, wbuf, o->fill) != (ssize_t)o->fill)
+    if (o->fill > 0 && o->f != INVALID_FILE && os_write(o->f, obuf, o->fill) != (ssize_t)o->fill)
         o->ok = false;
     o->fill = 0;
 }
@@ -1903,10 +1922,10 @@ out_put(out_t *o, const void *b, size_t n)
         return;
     }
     while (n > 0) {
-        if (o->fill == sizeof(wbuf))
+        if (o->fill == sizeof(obuf))
             out_flush(o);
-        size_t k = MIN(n, sizeof(wbuf) - o->fill);
-        memcpy(wbuf + o->fill, q, k);
+        size_t k = MIN(n, sizeof(obuf) - o->fill);
+        memcpy(obuf + o->fill, q, k);
         o->fill += k;
         q += k;
         n -= k;
@@ -1943,7 +1962,7 @@ write_file(void)
         wents[i] = t;
         sift(wents, 0, i);
     }
-    /* drop later builds of a block (rebuilt after a flush) */
+    /* keep one build of a block (rebuilt after a flush) */
     for (i = 0; i < wnum; i++) {
         if (num == 0 || ent_less(wents[num - 1], wents[i]))
             wents[num++] = wents[i];
@@ -1969,8 +1988,12 @@ write_file(void)
     h.body_hash = xdigest(&o.x);
     h.header_hash = hash64(&h, sizeof(h));
     cache_path(path, sizeof(path));
-    snprintf(tmp, sizeof(tmp), "%s.%d.tmp", path, get_process_id());
+    int tn = snprintf(tmp, sizeof(tmp), "%s.%d.tmp", path, get_process_id());
     tmp[sizeof(tmp) - 1] = '\0';
+    if (tn < 0 || (size_t)tn >= sizeof(tmp)) {
+        print_file(STDERR, "pcache: path too long, not written\n");
+        return;
+    }
     o.ok = true;
     o.fill = 0;
     o.f = os_open(tmp, OS_OPEN_WRITE | OS_OPEN_REQUIRE_NEW);

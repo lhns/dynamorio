@@ -455,9 +455,9 @@ vmcode_is_reachable(void)
 #ifdef X64
 /* designates the closed interval within which we must allocate DR heap space */
 static byte *heap_allowable_region_start = (byte *)PTR_UINT_0;
+static byte *heap_allowable_region_end = (byte *)POINTER_MAX;
 /* Whether vmcode was placed at -vm_base plus a random offset up to -vm_max_offset. */
 static bool vmcode_at_random_base;
-static byte *heap_allowable_region_end = (byte *)POINTER_MAX;
 
 /* Standalone library mode has no code cache, so it does not need 32-bit
  * heap reachability constraints.

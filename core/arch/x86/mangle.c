@@ -2624,10 +2624,6 @@ mangle_exit_cti_prefixes(dcontext_t *dcontext, instr_t *instr)
 }
 
 #ifdef X64
-/* PR 215397: re-relativize rip-relative data addresses */
-/* Should return NULL if it destroy "instr".  We don't support both destroying
- * (done only for x86: i#393) and changing next_instr (done only for ARM).
- */
 /* -stable_reach: the choice must not depend on vmcode's random offset (core/pcache.c). */
 static bool
 rip_rel_reaches(app_pc tgt)
@@ -2636,6 +2632,10 @@ rip_rel_reaches(app_pc tgt)
                                        : rel32_reachable_from_vmcode(tgt);
 }
 
+/* PR 215397: re-relativize rip-relative data addresses */
+/* Should return NULL if it destroy "instr".  We don't support both destroying
+ * (done only for x86: i#393) and changing next_instr (done only for ARM).
+ */
 instr_t *
 mangle_rel_addr(dcontext_t *dcontext, instrlist_t *ilist, instr_t *instr,
                 instr_t *next_instr)
