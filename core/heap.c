@@ -452,12 +452,13 @@ vmcode_is_reachable(void)
     return IF_AARCH64_ELSE(DYNAMO_OPTION(vm_size) <= MAX_VMCODE_REACHABLE_SIZE, true);
 }
 
+/* Whether vmcode was placed at -vm_base plus a random offset up to -vm_max_offset. */
+static bool vmcode_at_random_base;
+
 #ifdef X64
 /* designates the closed interval within which we must allocate DR heap space */
 static byte *heap_allowable_region_start = (byte *)PTR_UINT_0;
 static byte *heap_allowable_region_end = (byte *)POINTER_MAX;
-/* Whether vmcode was placed at -vm_base plus a random offset up to -vm_max_offset. */
-static bool vmcode_at_random_base;
 
 /* Standalone library mode has no code cache, so it does not need 32-bit
  * heap reachability constraints.
