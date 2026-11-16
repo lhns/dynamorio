@@ -3298,7 +3298,11 @@ translate_sigcontext(dcontext_t *dcontext, kernel_ucontext_t *uc, bool avoid_fai
             ASSERT_NOT_REACHED(); /* Raise a visible debug error: sthg is wrong. */
             /* XXX : what to do? reg state might be wrong at least get pc */
             if (safe_is_in_fcache(dcontext, (cache_pc)sc->SC_XIP, (app_pc)sc->SC_XSP)) {
-                sc->SC_XIP = (ptr_uint_t)recreate_app_pc(dcontext, mcontext.pc, f);
+                /* The failed attempt may have changed mcontext.pc already: pass the
+                 * cache pc, which the sigcontext still holds.
+                 */
+                sc->SC_XIP =
+                    (ptr_uint_t)recreate_app_pc(dcontext, (cache_pc)sc->SC_XIP, f);
                 ASSERT(sc->SC_XIP != (ptr_uint_t)NULL);
             } else {
                 /* XXX : can't even get pc right, what do we do here? */
@@ -5695,7 +5699,14 @@ check_for_modified_code(dcontext_t *dcontext, cache_pc instr_cache_pc,
                 translate_sigcontext(dcontext, uc, true, &f, &wrapper);
             ASSERT(context_is_translated);
             translated_pc = (app_pc)SIGCXT_FROM_UCXT(uc)->SC_XIP;
-            ASSERT(translated_pc != NULL);
+            /* Resuming at the write with state we could not translate would run the
+             * app on wrong registers (or at pc 0, faulting forever): stop instead.
+             */
+            if (!context_is_translated || translated_pc == NULL) {
+                report_unhandleable_signal_and_exit(
+                    SIGSEGV, "write to code whose context cannot be translated");
+                ASSERT_NOT_REACHED();
+            }
         }
 
         next_pc =
