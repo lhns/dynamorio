@@ -3397,6 +3397,8 @@ build_bb_ilist(dcontext_t *dcontext, build_bb_t *bb)
                     bb->cur_pc = decode_from_copy(
                         dcontext, bb->cur_pc, bb->pretend_pc + (bb->cur_pc - bb->start_pc),
                         bb->instr);
+                    /* Else the target is read from the raw bits, at the copy. */
+                    instr_set_rip_rel_valid(bb->instr, false);
                 } else
 #endif
                     bb->cur_pc = IF_AARCH64_ELSE(decode_with_ldstex,
