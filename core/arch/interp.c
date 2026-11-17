@@ -3388,8 +3388,21 @@ build_bb_ilist(dcontext_t *dcontext, build_bb_t *bb)
             bb->instr_start = bb->cur_pc;
             if (bb->full_decode) {
                 /* only going through this do loop once! */
-                bb->cur_pc = IF_AARCH64_ELSE(decode_with_ldstex,
-                                             decode)(dcontext, bb->cur_pc, bb->instr);
+#ifdef X86
+                if (bb->pretend_pc != NULL) {
+                    /* Recreating a selfmod fragment from its copy: rip-relative operands
+                     * must resolve against the app pc, or their mangling (and so the
+                     * fragment's layout) differs from what was emitted.
+                     */
+                    bb->cur_pc = decode_from_copy(
+                        dcontext, bb->cur_pc, bb->pretend_pc + (bb->cur_pc - bb->start_pc),
+                        bb->instr);
+                    /* Else the target is read from the raw bits, at the copy. */
+                    instr_set_rip_rel_valid(bb->instr, false);
+                } else
+#endif
+                    bb->cur_pc = IF_AARCH64_ELSE(decode_with_ldstex,
+                                                 decode)(dcontext, bb->cur_pc, bb->instr);
                 if (bb->record_translation)
                     instr_set_translation(bb->instr, bb->instr_start);
             } else {
