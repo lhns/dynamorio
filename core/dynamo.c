@@ -2504,6 +2504,9 @@ dynamo_thread_exit_pre_client(dcontext_t *dcontext, thread_id_t id)
     instrument_thread_exit_event(dcontext);
 }
 
+static void
+thread_not_under_dynamo(dcontext_t *dcontext, bool restore_sigblocked);
+
 /* thread-specific cleanup */
 /* Note : if this routine is not called by thread id, then other_thread should
  * be true and the calling thread should hold the thread_initexit_lock
@@ -2612,7 +2615,11 @@ dynamo_thread_exit_common(dcontext_t *dcontext, thread_id_t id,
      */
     if (!other_thread && !client_thread) {
 #if !(defined(MACOS) && defined(AARCH64))
-        dynamo_thread_not_under_dynamo(dcontext);
+        /* A thread in cleanup_and_terminate() keeps the mask its caller set (i#2921):
+         * the app's would let a signal in once the dcontext is gone below, which
+         * aborts with "multiple native handlers" once a vfork child has run.
+         */
+        thread_not_under_dynamo(dcontext, /*restore_sigblocked=*/!dcontext->is_exiting);
 #else
         /* i5383: on macOS a64 app TLS has already been free'd (i.e. in
          * macOS libpthread pthread_exit) and thus we must remain on priv TLS
@@ -2940,6 +2947,12 @@ dynamo_thread_under_dynamo(dcontext_t *dcontext)
 void
 dynamo_thread_not_under_dynamo(dcontext_t *dcontext)
 {
+    thread_not_under_dynamo(dcontext, /*restore_sigblocked=*/true);
+}
+
+static void
+thread_not_under_dynamo(dcontext_t *dcontext, bool restore_sigblocked)
+{
     ASSERT_MESSAGE(CHKLVL_ASSERTS + 1 /*expensive*/, "can only act on executing thread",
                    dcontext == get_thread_private_dcontext());
     if (dcontext == NULL)
@@ -2947,7 +2960,7 @@ dynamo_thread_not_under_dynamo(dcontext_t *dcontext)
     LOG(THREAD, LOG_ASYNCH, 2, "thread %d not under DR control\n",
         dcontext->owning_thread);
     dcontext->currently_stopped = true;
-    os_thread_not_under_dynamo(dcontext, /*restore_sigblocked=*/true);
+    os_thread_not_under_dynamo(dcontext, restore_sigblocked);
 #ifdef SIDELINE
     /* XXX: if # active threads is 0, then put sideline thread to sleep! */
     if (dynamo_options.sideline) {
