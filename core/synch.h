@@ -154,6 +154,12 @@ thread_synch_state_no_xfer(dcontext_t *dcontext);
 bool
 thread_synch_check_state(dcontext_t *dcontext, thread_synch_permission_t desired_perm);
 
+/* For a signal handler that interrupted this thread where thread_synch_check_state()
+ * passed and that delivers the signal now, abandoning the wait that set the permission.
+ */
+bool
+thread_synch_abandon_safe_spot(dcontext_t *dcontext);
+
 /* Only valid while holding all_threads_synch_lock and thread_initexit_lock.  Set to
  * whether synch_with_thread was successful.
  * Cannot be called when THREAD_SYNCH_*_AND_CLEANED was requested as the

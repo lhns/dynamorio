@@ -214,6 +214,26 @@ thread_synch_check_state(dcontext_t *dcontext, thread_synch_permission_t desired
     return false;
 }
 
+/* The wait that set synch_perm (check_wait_at_safe_spot(), a lock wait) will not
+ * reset it, so we do: a stale permission makes a later synch take this thread as
+ * waiting at a safe spot wherever it is, e.g., exiting while counted as such.
+ * Returns false, to delay the signal, if a synch has set the thread's context.
+ */
+bool
+thread_synch_abandon_safe_spot(dcontext_t *dcontext)
+{
+    thread_synch_data_t *tsd = (thread_synch_data_t *)dcontext->synch_field;
+    bool res = false;
+    if (!spinmutex_testlock(tsd->synch_lock) && spinmutex_trylock(tsd->synch_lock)) {
+        if (tsd->set_mcontext == NULL && tsd->set_context == NULL) {
+            tsd->synch_perm = THREAD_SYNCH_NONE;
+            res = true;
+        }
+        spinmutex_unlock(tsd->synch_lock);
+    }
+    return res;
+}
+
 /* Only valid while holding all_threads_synch_lock and thread_initexit_lock.  Set to
  * whether synch_with_all_threads was successful in synching this thread.
  * Cannot be called when THREAD_SYNCH_*_AND_CLEANED was requested as the

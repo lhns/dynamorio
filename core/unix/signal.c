@@ -4988,6 +4988,7 @@ record_pending_signal(dcontext_t *dcontext, int sig, kernel_ucontext_t *ucxt,
     bool blocked = false;
     bool handled = false;
     bool reroute = false;
+    bool from_safe_spot = false;
     bool at_auto_restart_syscall = false;
     int syslen = 0;
     reg_t orig_retval_reg = sc->SC_RETURN_REG;
@@ -5267,6 +5268,7 @@ record_pending_signal(dcontext_t *dcontext, int sig, kernel_ucontext_t *ucxt,
          * deliver it now.
          */
         receive_now = true;
+        from_safe_spot = true;
     } else {
         /* the signal interrupted DR itself => do not run handler now! */
         LOG(THREAD, LOG_ASYNCH, 2, "record_pending_signal(%d) from DR at pc " PFX "\n",
@@ -5322,6 +5324,9 @@ record_pending_signal(dcontext_t *dcontext, int sig, kernel_ucontext_t *ucxt,
             receive_now = false;
         }
     }
+
+    if (receive_now && from_safe_spot && !thread_synch_abandon_safe_spot(dcontext))
+        receive_now = false;
 
     if (receive_now) {
 
