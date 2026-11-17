@@ -2780,6 +2780,56 @@ os_thread_exit(dcontext_t *dcontext, bool other_thread)
 /* DIAG: state at the end of the pre-fork synch. */
 static volatile int diag_fork_synch_ok, diag_fork_exiting, diag_fork_uninit;
 
+static thread_id_t *
+os_list_threads(dcontext_t *dcontext, uint *num_threads_out);
+
+/* DIAG: the synch claims all threads; show the ones it holds and the ones it missed. */
+static void
+diag_fork_dump(dcontext_t *dcontext, os_thread_data_t *ostd)
+{
+    uint n, i;
+    int j;
+    char buf[512];
+    thread_id_t *tids = os_list_threads(dcontext, &n);
+    print_file(STDERR, "@@DRSYNCH me %d exiting=%d uninit=%d list=%d tasks=%u dr=%p\n",
+               get_sys_thread_id(), diag_fork_exiting, diag_fork_uninit,
+               ostd->fork_num_threads, n, get_dynamorio_dll_start());
+    for (j = 0; j < ostd->fork_num_threads; j++) {
+        thread_record_t *tr = ostd->fork_threads[j];
+        os_thread_data_t *o = (os_thread_data_t *)tr->dcontext->os_field;
+        print_file(STDERR,
+                   "@@DRSYNCH  held %d susp_count=%d suspended=%d where=%d exiting=%d "
+                   "native=%d\n",
+                   tr->id, o->suspend_count, ksynch_get_value(&o->suspended),
+                   tr->dcontext->whereami, tr->dcontext->is_exiting,
+                   is_thread_currently_native(tr));
+    }
+    for (i = 0; i < n; i++) {
+        bool held = false;
+        for (j = 0; j < ostd->fork_num_threads; j++) {
+            if (ostd->fork_threads[j]->id == tids[i])
+                held = true;
+        }
+        if (held || tids[i] == get_sys_thread_id())
+            continue;
+        const char *files[] = { "stat", "syscall" };
+        for (int f = 0; f < 2; f++) {
+            snprintf(buf, sizeof(buf), "/proc/self/task/%d/%s", tids[i], files[f]);
+            file_t fd = os_open(buf, OS_OPEN_READ);
+            ssize_t r = fd == INVALID_FILE ? -1 : os_read(fd, buf, sizeof(buf) - 1);
+            if (fd != INVALID_FILE)
+                os_close(fd);
+            buf[r < 0 ? 0 : r] = '\0';
+            for (char *c = buf; *c; c++) {
+                if (*c == '\n')
+                    *c = ' ';
+            }
+            print_file(STDERR, "@@DRSYNCH  missed %d %s: %s\n", tids[i], files[f], buf);
+        }
+    }
+    HEAP_ARRAY_FREE(dcontext, tids, thread_id_t, n, ACCT_THREAD_MGT, PROTECTED);
+}
+
 /* Happens in the parent prior to fork. */
 static void
 os_fork_pre(dcontext_t *dcontext)
@@ -2808,6 +2858,8 @@ os_fork_pre(dcontext_t *dcontext)
     diag_fork_synch_ok = diag_ok;
     diag_fork_exiting = exiting_thread_count;
     diag_fork_uninit = uninit_thread_count;
+    if (diag_fork_exiting != 0 || diag_fork_uninit != 0)
+        diag_fork_dump(dcontext, ostd);
     if (!diag_ok) {
         /* If we failed to synch with all threads, we live with the possibility
          * of deadlock and continue as normal.
