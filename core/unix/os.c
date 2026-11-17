@@ -2777,6 +2777,9 @@ os_thread_exit(dcontext_t *dcontext, bool other_thread)
     });
 }
 
+/* DIAG: state at the end of the pre-fork synch. */
+static volatile int diag_fork_synch_ok, diag_fork_exiting, diag_fork_uninit;
+
 /* Happens in the parent prior to fork. */
 static void
 os_fork_pre(dcontext_t *dcontext)
@@ -2794,14 +2797,18 @@ os_fork_pre(dcontext_t *dcontext)
      */
     LOG(GLOBAL, 2, LOG_SYSCALLS | LOG_THREADS,
         "fork: synching with other threads to prevent deadlock in child\n");
-    if (!synch_with_all_threads(THREAD_SYNCH_SUSPENDED_VALID_MCONTEXT_OR_NO_XFER,
+    bool diag_ok = synch_with_all_threads(THREAD_SYNCH_SUSPENDED_VALID_MCONTEXT_OR_NO_XFER,
                                 &ostd->fork_threads, &ostd->fork_num_threads,
                                 THREAD_SYNCH_VALID_MCONTEXT,
                                 /* If we fail to suspend a thread, there is a
                                  * risk of deadlock in the child, so it's worth
                                  * retrying on failure.
                                  */
-                                THREAD_SYNCH_SUSPEND_FAILURE_RETRY)) {
+                                THREAD_SYNCH_SUSPEND_FAILURE_RETRY);
+    diag_fork_synch_ok = diag_ok;
+    diag_fork_exiting = exiting_thread_count;
+    diag_fork_uninit = uninit_thread_count;
+    if (!diag_ok) {
         /* If we failed to synch with all threads, we live with the possibility
          * of deadlock and continue as normal.
          */
@@ -2864,6 +2871,15 @@ os_fork_init(dcontext_t *dcontext)
      */
     d_r_mutex_fork_reset(&all_threads_synch_lock);
     d_r_mutex_fork_reset(&thread_initexit_lock);
+    if (exiting_thread_count != 0 || uninit_thread_count != 0 || !diag_fork_synch_ok ||
+        initstack_mutex.lock_requests != SPINLOCK_FREE_STATE) {
+        print_file(STDERR,
+                   "@@DRFORK child %d: exiting=%d uninit=%d initstack=%d; at synch end "
+                   "ok=%d exiting=%d uninit=%d\n",
+                   get_sys_thread_id(), exiting_thread_count, uninit_thread_count,
+                   initstack_mutex.lock_requests, diag_fork_synch_ok, diag_fork_exiting,
+                   diag_fork_uninit);
+    }
 
     os_fork_post(dcontext, false /*!parent*/);
 
