@@ -8973,6 +8973,8 @@ handle_suspend_signal(dcontext_t *dcontext, kernel_siginfo_t *siginfo,
 
     sig_full_initialize(&sc_full, ucxt);
     ostd->suspended_sigcxt = &sc_full;
+    ptr_uint_t diag_pc0 = SIGCXT_FROM_UCXT(ucxt)->SC_XIP;
+    ptr_uint_t diag_sp0 = SIGCXT_FROM_UCXT(ucxt)->SC_XSP;
 
     LOG(THREAD, LOG_ASYNCH, 2, "handle_suspend_signal: suspended now\n");
     /* We cannot use mutexes here as we have interrupted DR at an
@@ -9045,6 +9047,20 @@ handle_suspend_signal(dcontext_t *dcontext, kernel_siginfo_t *siginfo,
     /* Notify os_thread_resume that it can return now, which (assuming
      * suspend_count is back to 0) means it's then safe to re-suspend.
      */
+    if (SIGCXT_FROM_UCXT(ucxt)->SC_XIP != diag_pc0 ||
+        SIGCXT_FROM_UCXT(ucxt)->SC_XSP != diag_sp0) {
+        int k = atomic_add_exchange_int(&diag_redir_n, 1) - 1;
+        if (k >= 0 && k < DIAG_SAFE_MAX) {
+            diag_redir[k].tid = d_r_get_thread_id();
+            diag_redir[k].pc = (app_pc)diag_pc0;
+            diag_redir[k].stk[0] = SIGCXT_FROM_UCXT(ucxt)->SC_XIP;
+            diag_redir[k].stk[1] = diag_sp0;
+            diag_redir[k].stk[2] = SIGCXT_FROM_UCXT(ucxt)->SC_XSP;
+            diag_redir[k].perm = ((int *)dcontext->synch_field)[3];
+            diag_redir[k].exiting = dcontext->is_exiting;
+            diag_redir[k].where = prior_whereami;
+        }
+    }
     ksynch_set_value(&ostd->suspended, 0); /*reset prior to signalling os_thread_resume*/
     ksynch_set_value(&ostd->resumed, 1);
     ksynch_wake_all(&ostd->resumed);

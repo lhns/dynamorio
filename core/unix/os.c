@@ -2794,6 +2794,17 @@ diag_fork_dump(dcontext_t *dcontext, os_thread_data_t *ostd)
     print_file(STDERR, "@@DRSYNCH me %d exiting=%d uninit=%d list=%d tasks=%u dr=%p\n",
                get_sys_thread_id(), diag_fork_exiting, diag_fork_uninit,
                ostd->fork_num_threads, n, get_dynamorio_dll_start());
+    for (j = 0; j < diag_redir_n && j < DIAG_SAFE_MAX; j++) {
+        print_file(STDERR,
+                   "@@DRSYNCH  redir %d from dr+%p sp %p to %p (dr+%p) sp %p where=%d "
+                   "exiting=%d\n",
+                   diag_redir[j].tid,
+                   (byte *)(diag_redir[j].pc - get_dynamorio_dll_start()),
+                   (void *)diag_redir[j].stk[1], (void *)diag_redir[j].stk[0],
+                   (byte *)(diag_redir[j].stk[0] - (ptr_uint_t)get_dynamorio_dll_start()),
+                   (void *)diag_redir[j].stk[2], diag_redir[j].where,
+                   diag_redir[j].exiting);
+    }
     for (j = 0; j < diag_safe_n && j < DIAG_SAFE_MAX; j++) {
         print_file(STDERR,
                    "@@DRSYNCH  safe %d pc=%p (dr+%p) where=%d perm=%d native=%d "

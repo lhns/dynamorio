@@ -951,6 +951,8 @@ synch_thread_yield(void)
  */
 diag_safe_t diag_safe[DIAG_SAFE_MAX];
 volatile int diag_safe_n;
+diag_safe_t diag_redir[DIAG_SAFE_MAX];
+volatile int diag_redir_n;
 
 thread_synch_result_t
 synch_with_thread(thread_id_t id, bool block, bool hold_initexit_lock,

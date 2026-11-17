@@ -291,5 +291,7 @@ typedef struct {
 } diag_safe_t;
 extern diag_safe_t diag_safe[DIAG_SAFE_MAX];
 extern volatile int diag_safe_n;
+extern diag_safe_t diag_redir[DIAG_SAFE_MAX];
+extern volatile int diag_redir_n;
 
 #endif /* SYNCH_H */
