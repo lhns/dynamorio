@@ -212,6 +212,11 @@ typedef struct {
     bool full_decode;   /* decode every instruction into a separate instr_t? */
     bool follow_direct; /* elide unconditional branches? */
     bool check_vm_area; /* whether to call check_thread_vm_area() */
+    /* Recreating a fragment built without sandboxing: its region may have been switched
+     * to sandboxing since (-ro2sandbox_threshold), but the rebuilt ilist must match the
+     * code that was emitted.
+     */
+    bool keep_unsandboxed;
     uint num_elide_jmp;
     uint num_elide_call;
     app_pc last_page;
@@ -255,6 +260,7 @@ init_build_bb(build_bb_t *bb, app_pc start_pc, bool app_interp, bool for_cache,
     }
 #endif
     bb->check_vm_area = true;
+    bb->keep_unsandboxed = false;
     bb->start_pc = start_pc;
     bb->app_interp = app_interp;
     bb->for_cache = for_cache;
@@ -707,6 +713,17 @@ eflags_analysis(instr_t *instr, int status, uint *eflags_6)
   starting there.
  */
 
+static bool
+bb_check_thread_vm_area(dcontext_t *dcontext, build_bb_t *bb, app_pc pc, bool xfer)
+{
+    bool ok = check_thread_vm_area(dcontext, pc, bb->start_pc,
+                                   (bb->record_vmlist ? &bb->vmlist : NULL), &bb->flags,
+                                   &bb->checked_end, xfer);
+    if (bb->keep_unsandboxed)
+        bb->flags &= ~FRAG_SELFMOD_SANDBOXED;
+    return ok;
+}
+
 static inline void
 check_new_page_start(dcontext_t *dcontext, build_bb_t *bb)
 {
@@ -714,9 +731,7 @@ check_new_page_start(dcontext_t *dcontext, build_bb_t *bb)
     if (!bb->check_vm_area)
         return;
     DEBUG_DECLARE(ok =)
-    check_thread_vm_area(dcontext, bb->start_pc, bb->start_pc,
-                         (bb->record_vmlist ? &bb->vmlist : NULL), &bb->flags,
-                         &bb->checked_end, false /*!xfer*/);
+    bb_check_thread_vm_area(dcontext, bb, bb->start_pc, false /*!xfer*/);
     ASSERT(ok); /* cannot return false on non-xfer */
     bb->last_page = bb->start_pc;
     if (bb->overlap_info != NULL)
@@ -740,17 +755,15 @@ check_new_page_contig(dcontext_t *dcontext, build_bb_t *bb, app_pc new_pc)
     if (bb->checked_end == NULL) {
         ASSERT(new_pc == bb->start_pc);
     } else if (new_pc >= bb->checked_end) {
-        if (!check_thread_vm_area(dcontext, new_pc, bb->start_pc,
-                                  (bb->record_vmlist ? &bb->vmlist : NULL), &bb->flags,
-                                  &bb->checked_end,
-                                  /* i#989: We don't want to fall through to an
-                                   * incompatible vmarea, so we treat fall
-                                   * through like a transfer.  We can't end the
-                                   * bb before the first instruction, so we pass
-                                   * false to forcibly merge in the vmarea
-                                   * flags.
-                                   */
-                                  !is_first_instr /*xfer*/)) {
+        if (!bb_check_thread_vm_area(dcontext, bb, new_pc,
+                                     /* i#989: We don't want to fall through to an
+                                      * incompatible vmarea, so we treat fall
+                                      * through like a transfer.  We can't end the
+                                      * bb before the first instruction, so we pass
+                                      * false to forcibly merge in the vmarea
+                                      * flags.
+                                      */
+                                     !is_first_instr /*xfer*/)) {
             return false;
         }
     }
@@ -807,9 +820,7 @@ check_new_page_jmp(dcontext_t *dcontext, build_bb_t *bb, app_pc new_pc)
     if (!bb->check_vm_area)
         return true;
     /* need to check this even if an intra-page jmp b/c we allow sub-page vm regions */
-    if (!check_thread_vm_area(dcontext, new_pc, bb->start_pc,
-                              (bb->record_vmlist ? &bb->vmlist : NULL), &bb->flags,
-                              &bb->checked_end, true /*xfer*/))
+    if (!bb_check_thread_vm_area(dcontext, bb, new_pc, true /*xfer*/))
         return false;
     if (bb->overlap_info != NULL)
         update_overlap_info(dcontext, bb, new_pc, true /*jmp*/);
@@ -5291,7 +5302,8 @@ instrlist_t *
 recreate_bb_ilist(dcontext_t *dcontext, byte *pc, byte *pretend_pc, app_pc stop_pc,
                   uint flags, uint *res_flags DR_PARAM_OUT,
                   uint *res_exit_type DR_PARAM_OUT, bool check_vm_area, bool mangle,
-                  void **vmlist_out DR_PARAM_OUT, bool call_client, bool for_trace)
+                  void **vmlist_out DR_PARAM_OUT, bool call_client, bool for_trace,
+                  bool keep_unsandboxed)
 {
     build_bb_t bb;
 
@@ -5312,6 +5324,7 @@ recreate_bb_ilist(dcontext_t *dcontext, byte *pc, byte *pretend_pc, app_pc stop_
      */
     bb.stop_pc = stop_pc;
     bb.check_vm_area = check_vm_area;
+    bb.keep_unsandboxed = keep_unsandboxed;
     if (check_vm_area && vmlist_out != NULL)
         bb.record_vmlist = true;
     if (check_vm_area && !bb.record_vmlist)
@@ -5434,7 +5447,8 @@ recreate_fragment_ilist(dcontext_t *dcontext, byte *pc,
         ilist = recreate_bb_ilist(dcontext, (byte *)f->tag, (byte *)f->tag,
                                   NULL /*default stop*/, 0 /*no pre flags*/, &flags, NULL,
                                   true /*check vm area*/, mangle, NULL, call_client,
-                                  false /*not for_trace*/);
+                                  false /*not for_trace*/,
+                                  !TESTANY(FRAG_SELFMOD_SANDBOXED, f->flags));
         ASSERT(ilist != NULL);
         if (ilist == NULL) /* a race */
             goto recreate_fragment_done;
@@ -5470,7 +5484,8 @@ recreate_fragment_ilist(dcontext_t *dcontext, byte *pc,
             bb = recreate_bb_ilist(
                 dcontext, apc, apc, NULL /*default stop*/, 0 /*no pre flags*/, &flags,
                 &md.final_exit_flags, true /*check vm area*/, !mangle_at_end,
-                (mangle_at_end ? &vmlist : NULL), call_client, true /*for_trace*/);
+                (mangle_at_end ? &vmlist : NULL), call_client, true /*for_trace*/,
+                true /*a trace holds no sandboxed bb*/);
             ASSERT(bb != NULL);
             if (bb == NULL) {
                 instrlist_clear_and_destroy(dcontext, ilist);
