@@ -69,6 +69,7 @@ typedef struct _thread_synch_data_t {
      * trylock, as it could have been suspended while holding synch_lock (i#2805).
      */
     thread_synch_permission_t synch_perm;
+    app_pc diag_perm_ra; /* DIAG: who set synch_perm last */
     /* Only valid while holding all_threads_synch_lock and thread_initexit_lock.  Set
      * to whether synch_with_all_threads was successful in synching this thread.
      */
@@ -135,6 +136,7 @@ synch_thread_init(dcontext_t *dcontext)
     dcontext->synch_field = (void *)tsd;
     tsd->pending_synch_count = 0;
     tsd->synch_perm = THREAD_SYNCH_NONE;
+    tsd->diag_perm_ra = (app_pc)2;
     tsd->synch_with_success = false;
     tsd->set_mcontext = NULL;
     tsd->set_context = NULL;
@@ -672,6 +674,7 @@ set_synch_state(dcontext_t *dcontext, thread_synch_permission_t state)
      */
     spinmutex_lock(tsd->synch_lock);
     tsd->synch_perm = state;
+    tsd->diag_perm_ra = (app_pc)__builtin_return_address(0);
     spinmutex_unlock(tsd->synch_lock);
 }
 
@@ -715,6 +718,7 @@ check_wait_at_safe_spot(dcontext_t *dcontext, thread_synch_permission_t cur_stat
     }
     spinmutex_lock(tsd->synch_lock);
     tsd->synch_perm = cur_state;
+    tsd->diag_perm_ra = (app_pc)__builtin_return_address(0);
     /* Since can be killed, suspended, etc. must call the exit dr hook. But, to
      * avoid races, we must do so before giving up the synch_lock. This is why
      * that lock has to be in unprotected memory. XXX - for single thread in
@@ -761,6 +765,7 @@ check_wait_at_safe_spot(dcontext_t *dcontext, thread_synch_permission_t cur_stat
     spinmutex_lock_no_yield(tsd->synch_lock);
     ENTERING_DR();
     tsd->synch_perm = THREAD_SYNCH_NONE;
+    tsd->diag_perm_ra = (app_pc)1;
     if (tsd->set_mcontext != NULL || tsd->set_context != NULL) {
         IF_WINDOWS(ASSERT(!started_detach));
         /* Make a local copy */
@@ -1096,9 +1101,12 @@ synch_with_thread(thread_id_t id, bool block, bool hold_initexit_lock,
                         diag_safe[k].pc = mc.pc;
                         diag_safe[k].where = trec->dcontext->whereami;
                         diag_safe[k].perm = ttsd->synch_perm;
+                        diag_safe[k].stk[0] =
+                            (ptr_uint_t)ttsd->diag_perm_ra - (ptr_uint_t)get_dynamorio_dll_start();
+                        diag_safe[k].stk[1] = ttsd->pending_synch_count;
                         diag_safe[k].native = is_thread_currently_native(trec);
                         diag_safe[k].exiting = trec->dcontext->is_exiting;
-                        diag_safe[k].nstk = 0;
+                        diag_safe[k].nstk = 2;
                         for (ptr_uint_t *sp = (ptr_uint_t *)mc.xsp;
                              (byte *)mc.xsp < trec->dcontext->dstack &&
                              (byte *)mc.xsp > trec->dcontext->dstack - DYNAMORIO_STACK_SIZE &&
