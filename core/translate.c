@@ -1282,7 +1282,8 @@ recreate_selfmod_ilist(dcontext_t *dcontext, fragment_t *f)
                               selfmod_copy + FRAGMENT_SELFMOD_COPY_CODE_SIZE(f),
                               FRAG_SELFMOD_SANDBOXED, NULL, NULL,
                               false /*don't check vm areas!*/, true /*mangle*/, NULL,
-                              true /*call client*/, false /*!for_trace*/);
+                              true /*call client*/, false /*!for_trace*/,
+                              false /*!keep_unsandboxed*/);
     ASSERT(ilist != NULL); /* shouldn't fail: our own code is always readable! */
     for (inst = instrlist_first(ilist); inst; inst = instr_get_next(inst)) {
         app_pc app = instr_get_translation(inst);
