@@ -1098,6 +1098,17 @@ synch_with_thread(thread_id_t id, bool block, bool hold_initexit_lock,
                         diag_safe[k].perm = ttsd->synch_perm;
                         diag_safe[k].native = is_thread_currently_native(trec);
                         diag_safe[k].exiting = trec->dcontext->is_exiting;
+                        diag_safe[k].nstk = 0;
+                        for (ptr_uint_t *sp = (ptr_uint_t *)mc.xsp;
+                             (byte *)mc.xsp < trec->dcontext->dstack &&
+                             (byte *)mc.xsp > trec->dcontext->dstack - DYNAMORIO_STACK_SIZE &&
+                             (byte *)sp < trec->dcontext->dstack && diag_safe[k].nstk < 40;
+                             sp++) {
+                            if (!is_in_dynamo_dll((app_pc)*sp))
+                                continue;
+                            diag_safe[k].stk[diag_safe[k].nstk++] =
+                                *sp - (ptr_uint_t)get_dynamorio_dll_start();
+                        }
                     }
                 }
                 /* XXX: case 5325 for detach handling and testing */

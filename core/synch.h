@@ -286,6 +286,8 @@ typedef struct {
     thread_id_t tid;
     app_pc pc;
     int where, perm, native, exiting;
+    int nstk;
+    ptr_uint_t stk[40];
 } diag_safe_t;
 extern diag_safe_t diag_safe[DIAG_SAFE_MAX];
 extern volatile int diag_safe_n;

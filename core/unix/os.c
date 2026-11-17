@@ -2802,6 +2802,10 @@ diag_fork_dump(dcontext_t *dcontext, os_thread_data_t *ostd)
                    (byte *)(diag_safe[j].pc - get_dynamorio_dll_start()),
                    diag_safe[j].where, diag_safe[j].perm, diag_safe[j].native,
                    diag_safe[j].exiting);
+        print_file(STDERR, "@@DRSYNCH  stk %d", diag_safe[j].tid);
+        for (int q = 0; q < diag_safe[j].nstk; q++)
+            print_file(STDERR, " %p", (void *)diag_safe[j].stk[q]);
+        print_file(STDERR, "\n");
     }
     for (j = 0; j < ostd->fork_num_threads; j++) {
         thread_record_t *tr = ostd->fork_threads[j];
