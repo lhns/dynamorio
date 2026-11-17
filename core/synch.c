@@ -944,6 +944,9 @@ synch_thread_yield(void)
  * enter_couldbelinking state)
  * NOTE - you can't call this with a thread that you've already suspended
  */
+diag_safe_t diag_safe[DIAG_SAFE_MAX];
+volatile int diag_safe_n;
+
 thread_synch_result_t
 synch_with_thread(thread_id_t id, bool block, bool hold_initexit_lock,
                   thread_synch_permission_t caller_state,
@@ -1084,6 +1087,19 @@ synch_with_thread(thread_id_t id, bool block, bool hold_initexit_lock,
                 break;
             }
             if (at_safe_spot(trec, &mc, desired_state)) {
+                if (trec->dcontext->is_exiting || is_in_dynamo_dll(mc.pc)) {
+                    thread_synch_data_t *ttsd =
+                        (thread_synch_data_t *)trec->dcontext->synch_field;
+                    int k = atomic_add_exchange_int(&diag_safe_n, 1) - 1;
+                    if (k >= 0 && k < DIAG_SAFE_MAX) {
+                        diag_safe[k].tid = trec->id;
+                        diag_safe[k].pc = mc.pc;
+                        diag_safe[k].where = trec->dcontext->whereami;
+                        diag_safe[k].perm = ttsd->synch_perm;
+                        diag_safe[k].native = is_thread_currently_native(trec);
+                        diag_safe[k].exiting = trec->dcontext->is_exiting;
+                    }
+                }
                 /* XXX: case 5325 for detach handling and testing */
                 IF_WINDOWS(
                     ASSERT_NOT_IMPLEMENTED(!dcontext->aslr_context.sys_aslr_clobbered));

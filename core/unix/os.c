@@ -2794,6 +2794,15 @@ diag_fork_dump(dcontext_t *dcontext, os_thread_data_t *ostd)
     print_file(STDERR, "@@DRSYNCH me %d exiting=%d uninit=%d list=%d tasks=%u dr=%p\n",
                get_sys_thread_id(), diag_fork_exiting, diag_fork_uninit,
                ostd->fork_num_threads, n, get_dynamorio_dll_start());
+    for (j = 0; j < diag_safe_n && j < DIAG_SAFE_MAX; j++) {
+        print_file(STDERR,
+                   "@@DRSYNCH  safe %d pc=%p (dr+%p) where=%d perm=%d native=%d "
+                   "exiting=%d\n",
+                   diag_safe[j].tid, diag_safe[j].pc,
+                   (byte *)(diag_safe[j].pc - get_dynamorio_dll_start()),
+                   diag_safe[j].where, diag_safe[j].perm, diag_safe[j].native,
+                   diag_safe[j].exiting);
+    }
     for (j = 0; j < ostd->fork_num_threads; j++) {
         thread_record_t *tr = ostd->fork_threads[j];
         os_thread_data_t *o = (os_thread_data_t *)tr->dcontext->os_field;
@@ -2847,6 +2856,7 @@ os_fork_pre(dcontext_t *dcontext)
      */
     LOG(GLOBAL, 2, LOG_SYSCALLS | LOG_THREADS,
         "fork: synching with other threads to prevent deadlock in child\n");
+    diag_safe_n = 0;
     bool diag_ok = synch_with_all_threads(THREAD_SYNCH_SUSPENDED_VALID_MCONTEXT_OR_NO_XFER,
                                 &ostd->fork_threads, &ostd->fork_num_threads,
                                 THREAD_SYNCH_VALID_MCONTEXT,

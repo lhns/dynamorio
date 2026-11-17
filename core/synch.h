@@ -280,4 +280,14 @@ is_at_do_syscall(dcontext_t *dcontext, app_pc pc, byte *esp);
 void
 adjust_wait_at_safe_spot(dcontext_t *dcontext, int amt);
 
+/* DIAG: threads at_safe_spot() passed while exiting or at a DR pc. */
+#define DIAG_SAFE_MAX 16
+typedef struct {
+    thread_id_t tid;
+    app_pc pc;
+    int where, perm, native, exiting;
+} diag_safe_t;
+extern diag_safe_t diag_safe[DIAG_SAFE_MAX];
+extern volatile int diag_safe_n;
+
 #endif /* SYNCH_H */
