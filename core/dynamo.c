@@ -2530,6 +2530,8 @@ dynamo_thread_exit_common(dcontext_t *dcontext, thread_id_t id,
     /* cache this now for use after freeing dcontext */
     local_state_t *local_state = dcontext->local_state;
 
+    if (!other_thread)
+        diag_ev_log(dcontext, 0x82);
     /* make sure don't get into deadlock w/ flusher */
     enter_threadexit(dcontext);
 

@@ -131,6 +131,16 @@ synch_exit(void)
 }
 
 #define DIAG_EV(tsd, code)                                                              do {                                                                                    (tsd)->diag_ev[(tsd)->diag_ev_n++ & 15] =                                               ((ptr_uint_t)(code) << 56) |                                                        (((ptr_uint_t)__builtin_return_address(0) -                                           (ptr_uint_t)get_dynamorio_dll_start()) & 0xffffffffffULL);                } while (0)
+/* DIAG: log an event with the caller's address in the thread's ring. */
+__attribute__((noinline)) void
+diag_ev_log(dcontext_t *dcontext, int code)
+{
+    if (dcontext == NULL || dcontext == GLOBAL_DCONTEXT || dcontext->synch_field == NULL)
+        return;
+    thread_synch_data_t *tsd = (thread_synch_data_t *)dcontext->synch_field;
+    DIAG_EV(tsd, code);
+}
+
 void
 synch_thread_init(dcontext_t *dcontext)
 {

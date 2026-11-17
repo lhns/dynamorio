@@ -4192,6 +4192,7 @@ transfer_from_sig_handler_to_fcache_return(dcontext_t *dcontext, kernel_ucontext
                                            app_pc next_pc, linkstub_t *last_exit,
                                            bool is_kernel_xfer)
 {
+    diag_ev_log(dcontext, 0x80);
     sigcontext_t *sc = SIGCXT_FROM_UCXT(uc);
     if (is_kernel_xfer) {
         sig_full_cxt_t sc_interrupted_full = { sc_interrupted, NULL /*not provided*/ };
@@ -5782,6 +5783,7 @@ sig_should_swap_stack(struct clone_and_swap_args *args, kernel_ucontext_t *ucxt)
 static bool
 sig_take_over(kernel_ucontext_t *uc)
 {
+    diag_ev_log(get_thread_private_dcontext(), 0x81);
     priv_mcontext_t mc;
     ucontext_to_mcontext(&mc, uc);
     /* We don't want our own blocked signals: we want the app's, stored in the frame. */
@@ -5881,6 +5883,7 @@ main_signal_handler_C(byte *xsp)
 #endif
 
     dcontext_t *dcontext = get_thread_private_dcontext();
+    diag_ev_log(dcontext, 0x40 + sig);
 
 #if defined(MACOS) && !defined(AARCH64)
 #    ifdef X64
