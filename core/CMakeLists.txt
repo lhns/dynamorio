@@ -205,6 +205,7 @@ set(CORE_SRCS
   module_list.c
   moduledb.c
   perscache.c
+  pcache.c
   nudge.c
   synch.c
   buildmark.c
