@@ -587,6 +587,9 @@ volatile int *
 get_clone_record_vfork_counted(void *record);
 void
 set_clone_record_vfork_counted(void *record, volatile int *claim);
+extern volatile int vfork_children_watched;
+void
+vfork_child_lock_note(int delta);
 volatile int *
 get_clone_record_vfork_init(void *record);
 void

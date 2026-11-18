@@ -204,6 +204,9 @@ typedef struct _os_thread_data_t {
      * child must have held nothing and left nothing its parent's cleanup would touch.
      */
     volatile int vfork_child_init;
+    /* The child's dstack, and its vfork_watch slot plus 1 (0: none) while it runs. */
+    byte *vfork_child_dstack;
+    int vfork_child_watch;
 
     /* i#107: If -mangle_app_seg is on, these hold the bases for both SEG_TLS
      * and LIB_SEG_TLS.  If -mangle_app_seg is off, the base for LIB_SEG_TLS
