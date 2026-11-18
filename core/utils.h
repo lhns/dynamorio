@@ -764,6 +764,10 @@ bool
 d_r_mutex_trylock(mutex_t *mutex);
 void
 d_r_mutex_unlock(mutex_t *mutex);
+void
+d_r_mutex_hand_over(mutex_t *mutex);
+void
+d_r_mutex_take_over(mutex_t *mutex);
 #ifdef UNIX
 void
 d_r_mutex_fork_reset(mutex_t *mutex);

@@ -304,6 +304,7 @@ new_thread_setup(priv_mcontext_t *mc)
     DEBUG_DECLARE(int rc =)
     dynamo_thread_init(get_clone_record_dstack(crec), mc, crec, false);
     ASSERT(rc != -1); /* this better be a new thread */
+    os_new_thread_inited(crec);
     dcontext = get_thread_private_dcontext();
     ASSERT(dcontext != NULL);
 #    if defined(AARCHXX) || defined(RISCV64)

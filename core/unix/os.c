@@ -2980,14 +2980,61 @@ os_new_thread_counted(void *clone_record)
     ATOMIC_DEC(int, uninit_thread_count);
 }
 
+/* vfork_child_init, as the child goes through dynamo_thread_init(). */
+enum {
+    VFORK_INIT_DONE,
+    /* It gave back thread_initexit_lock and runs the client's and loader's init. */
+    VFORK_INIT_UNLOCKED,
+    /* It runs under the thread_initexit_lock its parent took for it (vfork_wait_begin()). */
+    VFORK_INIT_LOCKED,
+};
+
+/* True if this new thread's parent holds thread_initexit_lock for its init. */
+bool
+os_new_thread_init_locked(void *clone_record)
+{
 #ifdef LINUX
-/* A vfork child and its parent share the claim on the uninit_thread_count taken for it. */
+    volatile int *init = get_clone_record_vfork_init(clone_record);
+    return init != NULL && *init == VFORK_INIT_LOCKED;
+#else
+    return false;
+#endif
+}
+
+/* Before this new thread's init unlocks thread_initexit_lock: if killed after this its
+ * parent must not unlock it again.
+ */
+void
+os_new_thread_init_unlocked(void *clone_record)
+{
+#ifdef LINUX
+    volatile int *init = get_clone_record_vfork_init(clone_record);
+    if (init != NULL)
+        *init = VFORK_INIT_UNLOCKED;
+#endif
+}
+
+void
+os_new_thread_inited(void *clone_record)
+{
+#ifdef LINUX
+    volatile int *init = get_clone_record_vfork_init(clone_record);
+    if (init != NULL)
+        *init = VFORK_INIT_DONE;
+#endif
+}
+
+#ifdef LINUX
+/* A vfork child and its parent share the claim on the uninit_thread_count taken for it,
+ * and the child reports its init (vfork_child_init).
+ */
 static void
 vfork_child_claim(dcontext_t *dcontext, void *clone_record)
 {
     os_thread_data_t *ostd = (os_thread_data_t *)dcontext->os_field;
     ostd->vfork_child_counted = 1;
     set_clone_record_vfork_counted(clone_record, &ostd->vfork_child_counted);
+    set_clone_record_vfork_init(clone_record, &ostd->vfork_child_init);
 }
 #endif
 
@@ -6235,8 +6282,19 @@ vfork_wait_begin(dcontext_t *dcontext)
 #    endif
     else
         return;
-    if (TESTANY(CLONE_VFORK, flags))
-        ((os_thread_data_t *)dcontext->os_field)->vfork_wait = VFORK_WAITING;
+    if (TESTANY(CLONE_VFORK, flags)) {
+        os_thread_data_t *ostd = (os_thread_data_t *)dcontext->os_field;
+        /* A child that shares our memory inits under this lock, taken for it here: it
+         * can be killed there, and DR's locks do not survive their owner.  It gives the
+         * lock back when done, or cleanup_after_vfork_child_death() unlocks it.
+         */
+        if (was_thread_create_syscall(dcontext)) {
+            d_r_mutex_lock(&thread_initexit_lock);
+            d_r_mutex_hand_over(&thread_initexit_lock);
+            ostd->vfork_child_init = VFORK_INIT_LOCKED;
+        }
+        ostd->vfork_wait = VFORK_WAITING;
+    }
 }
 
 /* A process exit abandoned this thread in vfork, and its child has let it go before the
@@ -6965,28 +7023,38 @@ cleanup_after_vfork_execve(dcontext_t *dcontext)
 /* A vfork has returned, so its child has exec'ed, exited or died.  One that a signal
  * killed ran no exit path, and its stale record would hang the next synch; one killed
  * before dynamo_thread_init() left the uninit_thread_count taken for it, which every
- * later synch_with_all_threads() would wait on.
- * Not handled: a child killed holding a DR lock.
+ * later synch_with_all_threads() would wait on.  One killed in its init still had the
+ * thread_initexit_lock taken for it, or a half-built thread whose exit paths would free
+ * what was never set up: only its record goes, and the rest is leaked.
  */
 static void
 cleanup_after_vfork_child_death(dcontext_t *dcontext, ptr_int_t child)
 {
     thread_record_t *tr;
     os_thread_data_t *ostd = (os_thread_data_t *)dcontext->os_field;
+    int init = ostd->vfork_child_init;
+    ostd->vfork_child_init = VFORK_INIT_DONE;
     if (atomic_exchange_int(&ostd->vfork_child_counted, 0) == 1) {
         ASSERT(uninit_thread_count > 0);
         ATOMIC_DEC(int, uninit_thread_count);
     }
-    if (child <= 0)
-        return;
-    d_r_mutex_lock(&thread_initexit_lock);
-    tr = thread_lookup((thread_id_t)child);
-    if (tr != NULL && !tr->execve) {
-        LOG(THREAD, LOG_SYSCALLS, 2, "cleaning up dead vfork child " TIDFMT "\n",
-            tr->id);
-        dynamo_other_thread_exit(tr);
+    if (init == VFORK_INIT_LOCKED)
+        d_r_mutex_take_over(&thread_initexit_lock);
+    else if (child > 0)
+        d_r_mutex_lock(&thread_initexit_lock);
+    if (child > 0) {
+        tr = thread_lookup((thread_id_t)child);
+        if (tr != NULL && !tr->execve) {
+            LOG(THREAD, LOG_SYSCALLS, 2, "cleaning up dead vfork child " TIDFMT "\n",
+                tr->id);
+            if (init == VFORK_INIT_DONE)
+                dynamo_other_thread_exit(tr);
+            else
+                remove_thread(tr->id);
+        }
     }
-    d_r_mutex_unlock(&thread_initexit_lock);
+    if (init == VFORK_INIT_LOCKED || child > 0)
+        d_r_mutex_unlock(&thread_initexit_lock);
 }
 
 /* True unless another thread group shares the address space, as a vfork child does.  Ending

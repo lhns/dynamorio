@@ -220,6 +220,8 @@ typedef struct _clone_record_t {
     clone3_syscall_args_t *app_clone_args;
     /* For a vfork child: the parent's claim on the uninit_thread_count it took. */
     volatile int *vfork_counted;
+    /* For a vfork child: where it reports its init to the parent (vfork_child_init). */
+    volatile int *vfork_init;
 #else
     uint clone_flags;
 #endif
@@ -878,6 +880,7 @@ create_clone_record(dcontext_t *dcontext, reg_t *app_thread_xsp)
     record->parent_info = (thread_sig_info_t *)dcontext->signal_field;
     record->pcprofile_info = dcontext->pcprofile_field;
     IF_LINUX(record->vfork_counted = NULL);
+    IF_LINUX(record->vfork_init = NULL);
 #if defined(AARCHXX) || defined(RISCV64)
     record->app_stolen_value = get_stolen_reg_val(get_mcontext(dcontext));
 #    ifdef ARM
@@ -933,6 +936,18 @@ void
 set_clone_record_vfork_counted(void *record, volatile int *claim)
 {
     ((clone_record_t *)record)->vfork_counted = claim;
+}
+
+volatile int *
+get_clone_record_vfork_init(void *record)
+{
+    return ((clone_record_t *)record)->vfork_init;
+}
+
+void
+set_clone_record_vfork_init(void *record, volatile int *init)
+{
+    ((clone_record_t *)record)->vfork_init = init;
 }
 #endif
 

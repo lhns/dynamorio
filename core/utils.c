@@ -942,6 +942,29 @@ d_r_mutex_unlock(mutex_t *lock)
     mutex_notify_released_lock(lock);
 }
 
+/* The caller stops owning a lock it holds, which stays held until another thread
+ * takes it over with d_r_mutex_take_over() and unlocks it.  Only debug builds track
+ * an owner.
+ */
+void
+d_r_mutex_hand_over(mutex_t *lock)
+{
+    ASSERT(lock->lock_requests > LOCK_FREE_STATE && "lock not owned");
+    DEADLOCK_AVOIDANCE_UNLOCK(lock, LOCK_OWNABLE);
+}
+
+/* The caller now owns a held lock: one handed over, or whose owner died. */
+void
+d_r_mutex_take_over(mutex_t *lock)
+{
+    ASSERT(lock->lock_requests > LOCK_FREE_STATE && "lock not held");
+#ifdef DEADLOCK_AVOIDANCE
+    lock->owner = INVALID_THREAD_ID;
+    lock->owning_dcontext = NULL;
+#endif
+    DEADLOCK_AVOIDANCE_LOCK(lock, true, LOCK_OWNABLE);
+}
+
 /* releases any associated kernel objects */
 void
 d_r_mutex_delete(mutex_t *lock)
