@@ -3027,12 +3027,15 @@ os_new_thread_inited(void *clone_record)
 #ifdef LINUX
 /* A vfork child can be killed anywhere, and DR's locks do not survive their owner.  While
  * one runs, the locks taken on its dstack are counted (VFORK_LOCK_NOTE in utils.c), so
- * that its parent can tell whether it died holding one.  Not counted: its signal stack.
+ * that its parent can tell whether it died holding one.  Not counted: its signal stack,
+ * and DR's exit once it is in it (vfork_child_exiting()).
  */
 #    define VFORK_WATCH_SLOTS 8
 typedef struct {
     byte *volatile dstack;
     volatile int held;
+    /* It went into DR's own exit, which unlocks off its dstack: the count is void. */
+    volatile bool exiting;
 } vfork_watch_t;
 DECLARE_NEVERPROT_VAR(volatile int vfork_children_watched, 0);
 DECLARE_NEVERPROT_VAR(static vfork_watch_t vfork_watch[VFORK_WATCH_SLOTS], { { 0 } });
@@ -3057,6 +3060,19 @@ vfork_child_lock_note(int delta)
     }
 }
 
+void
+vfork_child_exiting(void)
+{
+    byte *sp;
+    int i;
+    GET_STACK_PTR(sp);
+    for (i = 0; i < VFORK_WATCH_SLOTS; i++) {
+        byte *top = vfork_watch[i].dstack;
+        if (top != NULL && sp < top && sp >= top - DYNAMORIO_STACK_SIZE)
+            vfork_watch[i].exiting = true;
+    }
+}
+
 /* held: the locks the child starts with. Returns the slot, or -1 if all are taken. */
 static int
 vfork_watch_begin(byte *dstack, int held)
@@ -3067,6 +3083,7 @@ vfork_watch_begin(byte *dstack, int held)
             atomic_compare_exchange_ptr((ptr_uint_t *)&vfork_watch[i].dstack, 0,
                                         (ptr_uint_t)dstack)) {
             vfork_watch[i].held = held;
+            vfork_watch[i].exiting = false;
             ATOMIC_INC(int, vfork_children_watched);
             return i;
         }
@@ -3074,10 +3091,11 @@ vfork_watch_begin(byte *dstack, int held)
     return -1;
 }
 
+/* Returns the locks the child held, or 0 if it went into DR's exit. */
 static int
 vfork_watch_end(int slot)
 {
-    int held = vfork_watch[slot].held;
+    int held = vfork_watch[slot].exiting ? 0 : vfork_watch[slot].held;
     ATOMIC_DEC(int, vfork_children_watched);
     vfork_watch[slot].dstack = NULL;
     return held;
