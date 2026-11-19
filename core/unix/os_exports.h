@@ -596,6 +596,10 @@ volatile int *
 get_clone_record_vfork_init(void *record);
 void
 set_clone_record_vfork_init(void *record, volatile int *init);
+void
+set_clone_record_vfork_unstarted(void *record, volatile int *claim);
+void
+signal_unstarted_child_gone(dcontext_t *dcontext, volatile int *claim);
 #endif
 void
 os_new_thread_counted(void *clone_record);

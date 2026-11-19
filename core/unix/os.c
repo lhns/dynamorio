@@ -3101,15 +3101,18 @@ vfork_watch_end(int slot)
     return held;
 }
 
-/* A vfork child and its parent share the claim on the uninit_thread_count taken for it,
- * and the child reports its init (vfork_child_init).
+/* A vfork child and its parent share the claims on the uninit_thread_count taken for it
+ * and the num_unstarted_children raised for it, and the child reports its init
+ * (vfork_child_init).
  */
 static void
-vfork_child_claim(dcontext_t *dcontext, void *clone_record)
+vfork_child_claim(dcontext_t *dcontext, void *clone_record, uint64 flags)
 {
     os_thread_data_t *ostd = (os_thread_data_t *)dcontext->os_field;
     ostd->vfork_child_counted = 1;
     set_clone_record_vfork_counted(clone_record, &ostd->vfork_child_counted);
+    ostd->vfork_child_unstarted = TESTANY(CLONE_SIGHAND, flags) ? 0 : 1;
+    set_clone_record_vfork_unstarted(clone_record, &ostd->vfork_child_unstarted);
     set_clone_record_vfork_init(clone_record, &ostd->vfork_child_init);
     ostd->vfork_child_dstack = get_clone_record_dstack(clone_record);
 }
@@ -7101,7 +7104,9 @@ cleanup_after_vfork_execve(dcontext_t *dcontext)
 /* A vfork has returned, so its child has exec'ed, exited or died.  One that a signal
  * killed ran no exit path, and its stale record would hang the next synch; one killed
  * before dynamo_thread_init() left the uninit_thread_count taken for it, which every
- * later synch_with_all_threads() would wait on.  One killed in its init still had the
+ * later synch_with_all_threads() would wait on, and one killed before
+ * signal_thread_inherit(), or never created, the num_unstarted_children every later
+ * sigaction() would.  One killed in its init still had the
  * thread_initexit_lock taken for it, or a half-built thread whose exit paths would free
  * what was never set up: only its record goes, and the rest is leaked.  One killed holding
  * any other DR lock ends the process, as nothing can safely run.
@@ -7131,6 +7136,8 @@ cleanup_after_vfork_child_death(dcontext_t *dcontext, ptr_int_t child)
         ASSERT(uninit_thread_count > 0);
         ATOMIC_DEC(int, uninit_thread_count);
     }
+    /* Left raised, the next sigaction() and this thread's exit would wait for it. */
+    signal_unstarted_child_gone(dcontext, &ostd->vfork_child_unstarted);
     if (init == VFORK_INIT_LOCKED)
         d_r_mutex_take_over(&thread_initexit_lock);
     else if (child > 0)
@@ -7865,7 +7872,7 @@ handle_clone_pre(dcontext_t *dcontext)
                                        NULL, NULL);
         }
         if (TESTANY(CLONE_VFORK, flags))
-            vfork_child_claim(dcontext, crec);
+            vfork_child_claim(dcontext, crec, flags);
         /* Not for vfork: an exit may abandon the parent there (os_thread_abandon_in_vfork()),
          * and it then relies on getting a signal.
          */
@@ -8329,7 +8336,8 @@ pre_system_call(dcontext_t *dcontext)
 #    else
         vfork_child_claim(dcontext,
                           create_clone_record(dcontext, (reg_t *)&mc->xsp /*child uses parent sp*/,
-                                              NULL, NULL));
+                                              NULL, NULL),
+                          flags);
 #    endif
         os_clone_pre(dcontext);
         os_new_thread_pre();
@@ -9975,15 +9983,16 @@ post_system_call(dcontext_t *dcontext)
                 os_switch_lib_tls(dcontext, false /*to dr*/);
             /* i#2089: we already restored the DR tls in os_clone_post() */
 
-            /* No thread will drop the count os_new_thread_pre() took for it.  A vfork
-             * child's is dropped through its claim, below.
+            /* No thread will drop the counts os_new_thread_pre() and handle_clone()
+             * raised for it.  A vfork child's are dropped through its claims, below.
              */
-            if (result < 0 &&
-                !TESTANY(CLONE_VFORK,
-                         sysnum == SYS_clone3 ? get_stored_clone3_flags(dcontext)
-                                              : (uint64)dcontext->sys_param0)) {
+            uint64 cflags = sysnum == SYS_clone3 ? get_stored_clone3_flags(dcontext)
+                                                 : (uint64)dcontext->sys_param0;
+            if (result < 0 && !TESTANY(CLONE_VFORK, cflags)) {
                 ASSERT(uninit_thread_count > 0);
                 ATOMIC_DEC(int, uninit_thread_count);
+                if (!TESTANY(CLONE_SIGHAND, cflags))
+                    signal_unstarted_child_gone(dcontext, NULL);
             }
             /* Nor will one free the dstack create_clone_record() allocated for it. */
             if (result < 0) {
@@ -10023,9 +10032,7 @@ post_system_call(dcontext_t *dcontext)
                 set_syscall_param(dcontext, SYSCALL_PARAM_CLONE_STACK,
                                   dcontext->sys_param1);
             }
-            if (TESTANY(CLONE_VFORK,
-                        sysnum == SYS_clone3 ? get_stored_clone3_flags(dcontext)
-                                             : (uint64)dcontext->sys_param0))
+            if (TESTANY(CLONE_VFORK, cflags))
                 cleanup_after_vfork_child_death(dcontext, MCXT_SYSCALL_RES(mc));
         } else if (sysnum == SYS_clone3 && dcontext->sys_param1 != 0) {
             /* A fork that ran on DR's copy of clone_args, in the parent and in the child. */
