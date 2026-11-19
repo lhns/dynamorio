@@ -200,6 +200,17 @@ typedef struct _os_thread_data_t {
      * child or, if the child dies first, this thread drops it: whoever clears this.
      */
     volatile int vfork_child_counted;
+    /* How far a vfork child got in its thread init: VFORK_INIT_*.  Killed in it, the
+     * child must have held nothing and left nothing its parent's cleanup would touch.
+     */
+    volatile int vfork_child_init;
+    /* 1 while a vfork child has not dropped the num_unstarted_children handle_clone()
+     * raised for it (no CLONE_SIGHAND); cleared like vfork_child_counted.
+     */
+    volatile int vfork_child_unstarted;
+    /* The child's dstack, and its vfork_watch slot plus 1 (0: none) while it runs. */
+    byte *vfork_child_dstack;
+    int vfork_child_watch;
 
     /* i#107: If -mangle_app_seg is on, these hold the bases for both SEG_TLS
      * and LIB_SEG_TLS.  If -mangle_app_seg is off, the base for LIB_SEG_TLS

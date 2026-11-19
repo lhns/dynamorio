@@ -220,6 +220,10 @@ typedef struct _clone_record_t {
     clone3_syscall_args_t *app_clone_args;
     /* For a vfork child: the parent's claim on the uninit_thread_count it took. */
     volatile int *vfork_counted;
+    /* For a vfork child: where it reports its init to the parent (vfork_child_init). */
+    volatile int *vfork_init;
+    /* For a vfork child: the parent's claim on the num_unstarted_children it raised. */
+    volatile int *vfork_unstarted;
 #else
     uint clone_flags;
 #endif
@@ -878,6 +882,8 @@ create_clone_record(dcontext_t *dcontext, reg_t *app_thread_xsp)
     record->parent_info = (thread_sig_info_t *)dcontext->signal_field;
     record->pcprofile_info = dcontext->pcprofile_field;
     IF_LINUX(record->vfork_counted = NULL);
+    IF_LINUX(record->vfork_init = NULL);
+    IF_LINUX(record->vfork_unstarted = NULL);
 #if defined(AARCHXX) || defined(RISCV64)
     record->app_stolen_value = get_stolen_reg_val(get_mcontext(dcontext));
 #    ifdef ARM
@@ -933,6 +939,37 @@ void
 set_clone_record_vfork_counted(void *record, volatile int *claim)
 {
     ((clone_record_t *)record)->vfork_counted = claim;
+}
+
+volatile int *
+get_clone_record_vfork_init(void *record)
+{
+    return ((clone_record_t *)record)->vfork_init;
+}
+
+void
+set_clone_record_vfork_init(void *record, volatile int *init)
+{
+    ((clone_record_t *)record)->vfork_init = init;
+}
+
+void
+set_clone_record_vfork_unstarted(void *record, volatile int *claim)
+{
+    ((clone_record_t *)record)->vfork_unstarted = claim;
+}
+
+/* Drops the num_unstarted_children handle_clone() raised for a child that will not
+ * drop it: none was created, or a vfork child died first (claim, shared with it).
+ */
+void
+signal_unstarted_child_gone(dcontext_t *dcontext, volatile int *claim)
+{
+    thread_sig_info_t *info = (thread_sig_info_t *)dcontext->signal_field;
+    d_r_mutex_lock(&info->child_lock);
+    if (claim == NULL || atomic_exchange_int(claim, 0) == 1)
+        info->num_unstarted_children--;
+    d_r_mutex_unlock(&info->child_lock);
 }
 #endif
 
@@ -1260,7 +1297,11 @@ signal_thread_inherit(dcontext_t *dcontext, void *clone_record)
             d_r_mutex_unlock(&record->info.child_lock);
             /* this should be safe since parent should wait for us */
             d_r_mutex_lock(&record->parent_info->child_lock);
-            record->parent_info->num_unstarted_children--;
+            /* Under the lock: a vfork child killed holding it ends the process. */
+            if (IF_LINUX_ELSE(record->vfork_unstarted == NULL ||
+                                  atomic_exchange_int(record->vfork_unstarted, 0) == 1,
+                              true))
+                record->parent_info->num_unstarted_children--;
             d_r_mutex_unlock(&record->parent_info->child_lock);
         }
 

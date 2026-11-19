@@ -2238,6 +2238,19 @@ remove_thread(IF_WINDOWS_(HANDLE hthread) thread_id_t tid)
 /* this bool is protected by reset_pending_lock */
 DECLARE_FREQPROT_VAR(static bool reset_at_nth_thread_triggered, false);
 
+/* Thread init's unlock of thread_initexit_lock: a vfork child first stops its parent
+ * from unlocking it for it.
+ */
+static void
+thread_init_unlock(byte *dstack_in, void *os_data)
+{
+#ifdef UNIX
+    if (dstack_in != NULL)
+        os_new_thread_init_unlocked(os_data);
+#endif
+    d_r_mutex_unlock(&thread_initexit_lock);
+}
+
 /* thread-specific initialization
  * if dstack_in is NULL, then a dstack is allocated; else dstack_in is used
  * as the thread's dstack
@@ -2288,7 +2301,12 @@ dynamo_thread_init(byte *dstack_in, priv_mcontext_t *mc, void *os_data,
     bool dropped_uninit_count = false;
 #endif
     /* synch point so thread creation can be prevented for critical periods */
-    d_r_mutex_lock(&thread_initexit_lock);
+#ifdef UNIX
+    if (dstack_in != NULL && os_new_thread_init_locked(os_data))
+        d_r_mutex_take_over(&thread_initexit_lock);
+    else
+#endif
+        d_r_mutex_lock(&thread_initexit_lock);
 
     /* XXX i#2611: during detach, there is a race where a thread can
      * reach here on Windows despite init_apc_go_native (i#2600).
@@ -2315,7 +2333,7 @@ dynamo_thread_init(byte *dstack_in, priv_mcontext_t *mc, void *os_data,
                          "Thread %d reached initialization point while dynamo exiting, "
                          "waiting for app to exit\n",
                          d_r_get_thread_id()););
-        d_r_mutex_unlock(&thread_initexit_lock);
+        thread_init_unlock(dstack_in, os_data);
         os_thread_yield();
         /* just in case we want to support exited and then restarted at some
          * point */
@@ -2323,7 +2341,7 @@ dynamo_thread_init(byte *dstack_in, priv_mcontext_t *mc, void *os_data,
     }
 
     if (is_thread_initialized()) {
-        d_r_mutex_unlock(&thread_initexit_lock);
+        thread_init_unlock(dstack_in, os_data);
 #if defined(WINDOWS) && defined(DR_APP_EXPORTS)
         if (dr_api_entry)
             os_take_over_unmark_thread(d_r_get_thread_id());
@@ -2436,7 +2454,7 @@ dynamo_thread_init(byte *dstack_in, priv_mcontext_t *mc, void *os_data,
      * So we release it to shrink the time spent w/ this big lock, in particular
      * to avoid holding it while running private lib thread init code (i#875).
      */
-    d_r_mutex_unlock(&thread_initexit_lock);
+    thread_init_unlock(dstack_in, os_data);
 
     /* Set up client data needed in loader_thread_init for IS_CLIENT_THREAD */
     instrument_client_thread_init(dcontext, client_thread);
@@ -2530,6 +2548,10 @@ dynamo_thread_exit_common(dcontext_t *dcontext, thread_id_t id,
     /* cache this now for use after freeing dcontext */
     local_state_t *local_state = dcontext->local_state;
 
+#ifdef LINUX
+    if (!other_thread && vfork_children_watched != 0)
+        vfork_child_exiting();
+#endif
     /* make sure don't get into deadlock w/ flusher */
     enter_threadexit(dcontext);
 

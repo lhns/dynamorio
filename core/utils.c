@@ -761,6 +761,19 @@ utils_init(void)
     set_exception_strings(NULL, NULL); /* use defaults */
 }
 
+/* Counts, before an acquire and after a release, the locks a vfork child may hold
+ * (vfork_child_lock_note()).
+ */
+#ifdef LINUX
+#    define VFORK_LOCK_NOTE(delta)              \
+        do {                                    \
+            if (vfork_children_watched != 0)    \
+                vfork_child_lock_note(delta);   \
+        } while (0)
+#else
+#    define VFORK_LOCK_NOTE(delta) /* nothing */
+#endif
+
 /* NOTE since used by spinmutex_lock_no_yield, can make no system calls before
  * the lock is grabbed (required by check_wait_at_safe_spot). */
 bool
@@ -768,9 +781,12 @@ spinmutex_trylock(spin_mutex_t *spin_lock)
 {
     mutex_t *lock = &spin_lock->lock;
     int mutexval;
+    VFORK_LOCK_NOTE(1);
     mutexval = atomic_swap(&lock->lock_requests, LOCK_SET_STATE);
     ASSERT(mutexval == LOCK_FREE_STATE || mutexval == LOCK_SET_STATE);
     DEADLOCK_AVOIDANCE_LOCK(lock, mutexval == LOCK_FREE_STATE, LOCK_OWNABLE);
+    if (mutexval != LOCK_FREE_STATE)
+        VFORK_LOCK_NOTE(-1);
     return (mutexval == LOCK_FREE_STATE);
 }
 
@@ -813,6 +829,7 @@ spinmutex_unlock(spin_mutex_t *spin_lock)
     ASSERT(lock->lock_requests == LOCK_SET_STATE);
     DEADLOCK_AVOIDANCE_UNLOCK(lock, LOCK_OWNABLE);
     lock->lock_requests = LOCK_FREE_STATE;
+    VFORK_LOCK_NOTE(-1);
     /* NOTE - check_wait_at_safe_spot requires that no system calls be made
      * after we release the lock */
     return;
@@ -839,6 +856,9 @@ mutex_ownable(mutex_t *lock)
 }
 #endif
 
+static bool
+mutex_trylock_uncounted(mutex_t *lock);
+
 void
 d_r_mutex_lock_app(mutex_t *lock, priv_mcontext_t *mc)
 {
@@ -846,6 +866,7 @@ d_r_mutex_lock_app(mutex_t *lock, priv_mcontext_t *mc)
 #ifdef DEADLOCK_AVOIDANCE
     bool ownable = mutex_ownable(lock);
 #endif
+    VFORK_LOCK_NOTE(1);
 
     /* we may want to first spin the lock for a while if we are on a multiprocessor
      * machine
@@ -854,7 +875,7 @@ d_r_mutex_lock_app(mutex_t *lock, priv_mcontext_t *mc)
     if (spinlock_count) {
         uint i;
         /* in the common case we'll just get it */
-        if (d_r_mutex_trylock(lock))
+        if (mutex_trylock_uncounted(lock))
             return;
 
         /* otherwise contended, we should spin for some time */
@@ -908,6 +929,17 @@ bool
 d_r_mutex_trylock(mutex_t *lock)
 {
     bool acquired;
+    VFORK_LOCK_NOTE(1);
+    acquired = mutex_trylock_uncounted(lock);
+    if (!acquired)
+        VFORK_LOCK_NOTE(-1);
+    return acquired;
+}
+
+static bool
+mutex_trylock_uncounted(mutex_t *lock)
+{
+    bool acquired;
 #ifdef DEADLOCK_AVOIDANCE
     bool ownable = mutex_ownable(lock);
 #endif
@@ -934,12 +966,35 @@ d_r_mutex_unlock(mutex_t *lock)
     ASSERT(lock->lock_requests > LOCK_FREE_STATE && "lock not owned");
     DEADLOCK_AVOIDANCE_UNLOCK(lock, ownable);
 
-    if (d_r_atomic_dec_and_test(&lock->lock_requests))
-        return;
     /* if we were not the last one to hold the lock,
        (i.e. final value is not LOCK_FREE_STATE)
        we need to notify another waiting thread */
-    mutex_notify_released_lock(lock);
+    if (!d_r_atomic_dec_and_test(&lock->lock_requests))
+        mutex_notify_released_lock(lock);
+    VFORK_LOCK_NOTE(-1);
+}
+
+/* The caller stops owning a lock it holds, which stays held until another thread
+ * takes it over with d_r_mutex_take_over() and unlocks it.  Only debug builds track
+ * an owner.
+ */
+void
+d_r_mutex_hand_over(mutex_t *lock)
+{
+    ASSERT(lock->lock_requests > LOCK_FREE_STATE && "lock not owned");
+    DEADLOCK_AVOIDANCE_UNLOCK(lock, LOCK_OWNABLE);
+}
+
+/* The caller now owns a held lock: one handed over, or whose owner died. */
+void
+d_r_mutex_take_over(mutex_t *lock)
+{
+    ASSERT(lock->lock_requests > LOCK_FREE_STATE && "lock not held");
+#ifdef DEADLOCK_AVOIDANCE
+    lock->owner = INVALID_THREAD_ID;
+    lock->owning_dcontext = NULL;
+#endif
+    DEADLOCK_AVOIDANCE_LOCK(lock, true, LOCK_OWNABLE);
 }
 
 /* releases any associated kernel objects */
@@ -1110,6 +1165,7 @@ self_owns_recursive_lock(recursive_lock_t *lock)
 void
 d_r_read_lock(read_write_lock_t *rw)
 {
+    VFORK_LOCK_NOTE(1);
     /* wait for writer here if lock is held
      * XXX: generalize DEADLOCK_AVOIDANCE to both detect
      * order violations and gather contention stats for
@@ -1290,6 +1346,7 @@ d_r_read_unlock(read_write_lock_t *rw)
     if (INTERNAL_OPTION(spin_yield_rwlock)) {
         ATOMIC_DEC(int, rw->num_readers);
         DEADLOCK_AVOIDANCE_UNLOCK(&rw->lock, LOCK_NOT_OWNABLE);
+        VFORK_LOCK_NOTE(-1);
         return;
     }
 
@@ -1323,6 +1380,7 @@ d_r_read_unlock(read_write_lock_t *rw)
     }
 
     DEADLOCK_AVOIDANCE_UNLOCK(&rw->lock, LOCK_NOT_OWNABLE);
+    VFORK_LOCK_NOTE(-1);
 }
 
 void
@@ -1336,6 +1394,7 @@ d_r_write_unlock(read_write_lock_t *rw)
         d_r_mutex_unlock(&rw->lock);
         return;
     }
+    VFORK_LOCK_NOTE(1);
     /* we need to signal all waiting readers (if any) that they can now go
        ahead.  No writer should be allowed to lock until all currently
        waiting readers are unblocked.
@@ -1350,6 +1409,7 @@ d_r_write_unlock(read_write_lock_t *rw)
         /* after we've released the write lock, pending readers will no longer wait */
         rwlock_notify_readers(rw);
     }
+    VFORK_LOCK_NOTE(-1);
 }
 
 bool

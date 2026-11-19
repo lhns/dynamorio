@@ -587,9 +587,28 @@ volatile int *
 get_clone_record_vfork_counted(void *record);
 void
 set_clone_record_vfork_counted(void *record, volatile int *claim);
+extern volatile int vfork_children_watched;
+void
+vfork_child_lock_note(int delta);
+void
+vfork_child_exiting(void);
+volatile int *
+get_clone_record_vfork_init(void *record);
+void
+set_clone_record_vfork_init(void *record, volatile int *init);
+void
+set_clone_record_vfork_unstarted(void *record, volatile int *claim);
+void
+signal_unstarted_child_gone(dcontext_t *dcontext, volatile int *claim);
 #endif
 void
 os_new_thread_counted(void *clone_record);
+bool
+os_new_thread_init_locked(void *clone_record);
+void
+os_new_thread_init_unlocked(void *clone_record);
+void
+os_new_thread_inited(void *clone_record);
 
 #if defined(AARCHXX) || defined(RISCV64)
 reg_t
