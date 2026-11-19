@@ -40,6 +40,7 @@
 #include <sys/file.h>
 #include <signal.h>
 #include <errno.h>
+#include <sys/syscall.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -127,6 +128,45 @@ test_signalfd(int sig)
     intercept_signal(sig, (handler_3_t)NULL, false);
 }
 
+static int handled;
+
+static void
+count_handler(int sig)
+{
+    handled++;
+}
+
+/* A signalfd closed by close_range must no longer take its signal. */
+static void
+test_close_range(int sig)
+{
+    int sigfd;
+    sigset_t mask;
+
+    intercept_signal(sig, (handler_3_t)count_handler, false);
+    sigemptyset(&mask);
+    sigaddset(&mask, sig);
+    sigprocmask(SIG_BLOCK, &mask, NULL);
+    sigfd = signalfd(-1, &mask, 0);
+    if (sigfd < 0) {
+        print("signalfd failed: %m");
+        exit(1);
+    }
+#ifdef SYS_close_range
+    /* To ~0U, as glibc's closefrom() does.  This also closes the 2nd fds that
+     * test_signalfd() leaves open.
+     */
+    if (syscall(SYS_close_range, sigfd, ~0U, 0) != 0)
+        print("close_range failed: %m\n");
+#else
+    close(sigfd);
+#endif
+    kill(getpid(), sig);
+    sigprocmask(SIG_UNBLOCK, &mask, NULL);
+    print("handler ran %d time(s) after the close\n", handled);
+    intercept_signal(sig, (handler_3_t)NULL, false);
+}
+
 int
 main(void)
 {
@@ -134,5 +174,6 @@ main(void)
     test_signalfd(SIGUSR1);
     test_signalfd(SIGSEGV);
     test_signalfd(44);
+    test_close_range(SIGUSR2);
     return 0;
 }

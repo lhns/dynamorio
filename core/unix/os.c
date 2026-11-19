@@ -4928,6 +4928,27 @@ fd_is_dr_owned(file_t fd)
     return (flags != 0);
 }
 
+/* The lowest DR-owned fd in [first, last], if any. */
+static bool
+fd_table_next_dr_owned(uint first, uint last, DR_PARAM_OUT uint *fd)
+{
+    ptr_uint_t key;
+    void *payload;
+    bool found = false;
+    int iter = 0;
+    ASSERT(fd_table != NULL);
+    TABLE_RWLOCK(fd_table, read, lock);
+    while ((iter = generic_hash_iterate_next(GLOBAL_DCONTEXT, fd_table, iter, &key,
+                                             &payload)) >= 0) {
+        if (key >= first && key <= last && (!found || key < *fd)) {
+            *fd = (uint)key;
+            found = true;
+        }
+    }
+    TABLE_RWLOCK(fd_table, read, unlock);
+    return found;
+}
+
 static bool
 fd_is_in_private_range(file_t fd)
 {
@@ -8826,7 +8847,9 @@ pre_system_call(dcontext_t *dcontext)
         }
         /* We do not let the app execute their own close_range ever. Instead we
          * make multiple close_range syscalls ourselves, one for each contiguous
-         * sub-range of non-DR-private fds in [first, last].
+         * sub-range of non-DR-private fds in [first, last].  The range can end at
+         * INT_MAX or ~0U (CPython's close_fds, closefrom()), so we visit only DR's
+         * fds and the std fds, not every fd in it.
          */
         execute_syscall = false;
         if (first_fd > last_fd) {
@@ -8834,44 +8857,38 @@ pre_system_call(dcontext_t *dcontext)
             DODEBUG({ dcontext->expect_last_syscall_to_fail = true; });
             break;
         }
-        uint cur_range_first_fd = 0;
-        uint cur_range_last_fd = 0;
-        bool cur_range_valid = false;
-        int ret = 0;
-        for (int i = first_fd; i <= last_fd; i++) {
-            /* Do not allow any changes to DR-owned FDs. */
-            if ((is_cloexec && fd_is_dr_owned(i)) ||
-                (!is_cloexec && !handle_close_range_pre(dcontext, i))) {
-                SYSLOG_INTERNAL_WARNING_ONCE("app trying to close private fd(s)");
-                if (cur_range_valid) {
-                    cur_range_valid = false;
-                    ret = dynamorio_syscall(SYS_close_range, 3, cur_range_first_fd,
-                                            cur_range_last_fd, flags);
-                    if (ret != 0)
-                        break;
-                }
-            } else {
-#    ifdef LINUX
-                if (!is_cloexec) {
-                    signal_handle_close(dcontext, i);
-                }
-#    endif
-                if (cur_range_valid) {
-                    ASSERT(cur_range_last_fd == i - 1);
-                    cur_range_last_fd = i;
-                } else {
-                    cur_range_first_fd = i;
-                    cur_range_last_fd = i;
-                    cur_range_valid = true;
-                }
+        if (!is_cloexec) {
+            /* Before the walk: closing DR's stdin, stdout or stderr first dups it
+             * into a DR-owned fd.
+             */
+            file_t std_fds[] = { STDIN, STDOUT, STDERR };
+            for (uint k = 0; k < BUFFER_SIZE_ELEMENTS(std_fds); k++) {
+                if (std_fds[k] >= 0 && (uint)std_fds[k] >= first_fd &&
+                    (uint)std_fds[k] <= last_fd)
+                    handle_close_range_pre(dcontext, std_fds[k]);
             }
+#    ifdef LINUX
+            signal_handle_close_range(dcontext, first_fd, last_fd);
+#    endif
         }
-        if (cur_range_valid) {
-            ret = dynamorio_syscall(SYS_close_range, 3, cur_range_first_fd,
-                                    cur_range_last_fd, flags);
+        int ret = 0;
+        uint cur = first_fd;
+        while (true) {
+            uint dr_fd = 0;
+            bool found = fd_table_next_dr_owned(cur, last_fd, &dr_fd);
+            if (found)
+                SYSLOG_INTERNAL_WARNING_ONCE("app trying to close private fd(s)");
+            if (!found || dr_fd > cur) {
+                ret = dynamorio_syscall(SYS_close_range, 3, cur,
+                                        found ? dr_fd - 1 : last_fd, flags);
+            }
+            if (ret != 0 || !found || dr_fd == last_fd)
+                break;
+            cur = dr_fd + 1;
         }
         if (ret != 0) {
-            set_failure_return_val(dcontext, ret);
+            /* ret is -errno. */
+            set_failure_return_val(dcontext, -ret);
             DODEBUG({ dcontext->expect_last_syscall_to_fail = true; });
         } else {
             set_success_return_val(dcontext, 0);

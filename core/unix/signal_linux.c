@@ -545,6 +545,19 @@ signal_handle_dup(dcontext_t *dcontext, file_t src, file_t dst)
     TABLE_RWLOCK(sigfd_table, write, unlock);
 }
 
+/* signal_handle_close() for every fd in [first, last]. */
+void
+signal_handle_close_range(dcontext_t *dcontext, uint first, uint last)
+{
+    TABLE_RWLOCK(sigfd_table, write, lock);
+    /* These call sigfd_pipe_free() for each.  The end is exclusive, and last + 1
+     * would wrap for ~0U where ptr_uint_t is 32 bits.
+     */
+    generic_hash_range_remove(GLOBAL_DCONTEXT, sigfd_table, first, last);
+    generic_hash_remove(GLOBAL_DCONTEXT, sigfd_table, last);
+    TABLE_RWLOCK(sigfd_table, write, unlock);
+}
+
 void
 signal_handle_close(dcontext_t *dcontext, file_t fd)
 {
