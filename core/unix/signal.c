@@ -5036,6 +5036,8 @@ record_pending_signal(dcontext_t *dcontext, int sig, kernel_ucontext_t *ucxt,
     sigpending_t *pend;
     fragment_t *f = NULL;
     fragment_t wrapper;
+    /* A fault the code cache raised itself, delivered at once (not delayable). */
+    bool sync_fault_in_cache = false;
 
     /* We no longer block SUSPEND_SIGNAL (i#184/PR 450670) or SIGSEGV (i#193/PR 287309).
      * But we can have re-entrancy issues in this routine if the app uses the same
@@ -5215,6 +5217,7 @@ record_pending_signal(dcontext_t *dcontext, int sig, kernel_ucontext_t *ucxt,
         } else {
             /* the signal interrupted code cache => run handler now! */
             receive_now = true;
+            sync_fault_in_cache = true;
             LOG(THREAD, LOG_ASYNCH, 2, "\tnot certain can delay so handling now\n");
         }
     } else if (in_generated_routine(dcontext, pc) ||
@@ -5355,6 +5358,21 @@ record_pending_signal(dcontext_t *dcontext, int sig, kernel_ucontext_t *ucxt,
         ASSERT(!forged);
         xl8_success =
             translate_sigcontext(dcontext, ucxt, !can_always_delay[sig], &f, &wrapper);
+        /* A deleted fragment is translated by rebuilding it from app code, which may
+         * have changed since. If that fails, the handler would get pc 0 or a wrong
+         * state: stop instead. Only on failure: a call through NULL faults at pc 0 too.
+         */
+        if (sync_fault_in_cache && !xl8_success && f != NULL &&
+            TEST(FRAG_WAS_DELETED, f->flags)) {
+            char msg[128];
+            snprintf(msg, BUFFER_SIZE_ELEMENTS(msg),
+                     "fault in deleted fragment " PFX
+                     " whose context cannot be translated, address " PFX,
+                     f->tag, frame->info.si_addr);
+            NULL_TERMINATE_BUFFER(msg);
+            report_unhandleable_signal_and_exit(sig, msg);
+            ASSERT_NOT_REACHED();
+        }
 
         if (can_always_delay[sig] && !xl8_success) {
             /* delay: we expect this for coarse fragments if alarm arrives
