@@ -926,10 +926,13 @@ recreate_app_state_from_info(dcontext_t *tdcontext, const translation_info_t *in
         instr_set_our_mangling(&instr, ours);
         /* Sets the translation so that spilled registers can be restored. */
         instr_set_translation(&instr, answer);
+        /* We directly set this field rather than inserting synthetic labels.  It must
+         * describe this instr before it is tracked, as the labels do for an ilist:
+         * else a spill right after a clean call is not tracked and not restored.
+         */
+        walk.in_clean_call = in_clean_call;
         translate_walk_track_pre_instr(tdcontext, &instr, &walk);
         translate_walk_track_post_instr(tdcontext, &instr, &walk);
-        /* We directly set this field rather than inserting synthetic labels. */
-        walk.in_clean_call = in_clean_call;
 
         /* advance translation by the stride: either instr length or 0 */
         if (contig)
