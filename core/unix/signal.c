@@ -5363,7 +5363,7 @@ record_pending_signal(dcontext_t *dcontext, int sig, kernel_ucontext_t *ucxt,
          * state: stop instead. Only on failure: a call through NULL faults at pc 0 too.
          */
         if (sync_fault_in_cache && !xl8_success && f != NULL &&
-            TEST(FRAG_WAS_DELETED, f->flags)) {
+            TESTANY(FRAG_WAS_DELETED, f->flags)) {
             char msg[128];
             snprintf(msg, BUFFER_SIZE_ELEMENTS(msg),
                      "fault in deleted fragment " PFX
