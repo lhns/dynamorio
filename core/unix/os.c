@@ -8887,7 +8887,8 @@ pre_system_call(dcontext_t *dcontext)
             cur = dr_fd + 1;
         }
         if (ret != 0) {
-            set_failure_return_val(dcontext, ret);
+            /* ret is -errno. */
+            set_failure_return_val(dcontext, -ret);
             DODEBUG({ dcontext->expect_last_syscall_to_fail = true; });
         } else {
             set_success_return_val(dcontext, 0);

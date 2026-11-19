@@ -188,6 +188,11 @@ main(int argc, const char *argv[])
     /* Test EINVAL. */
     if (syscall(__NR_close_range, 3, 2, 0) != -1 || errno != EINVAL)
         print("expected EINVAL from close_range");
+    /* Test an error from the kernel: an undefined flag. */
+    if (syscall(__NR_close_range, rlimit.rlim_max - 20, rlimit.rlim_max - 11,
+                0x80000000U) != -1 ||
+        errno != EINVAL)
+        print("expected EINVAL from close_range with an undefined flag\n");
 #    endif
     struct rlimit new_rlimit;
     /* setrlimit with lower soft value */

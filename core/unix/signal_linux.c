@@ -550,8 +550,11 @@ void
 signal_handle_close_range(dcontext_t *dcontext, uint first, uint last)
 {
     TABLE_RWLOCK(sigfd_table, write, lock);
-    /* This calls sigfd_pipe_free() for each. */
-    generic_hash_range_remove(GLOBAL_DCONTEXT, sigfd_table, first, (ptr_uint_t)last + 1);
+    /* These call sigfd_pipe_free() for each.  The end is exclusive, and last + 1
+     * would wrap for ~0U where ptr_uint_t is 32 bits.
+     */
+    generic_hash_range_remove(GLOBAL_DCONTEXT, sigfd_table, first, last);
+    generic_hash_remove(GLOBAL_DCONTEXT, sigfd_table, last);
     TABLE_RWLOCK(sigfd_table, write, unlock);
 }
 
