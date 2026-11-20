@@ -405,8 +405,10 @@ compute_key(void)
 static bool
 cache_path(char *buf, size_t len)
 {
+    string_option_read_lock();
     int n = snprintf(buf, len, "%s/%s.pcache", DYNAMO_OPTION(pcache_dir),
                      get_application_short_name());
+    string_option_read_unlock();
     buf[len - 1] = '\0';
     return n >= 0 && (size_t)n < len;
 }
@@ -481,7 +483,7 @@ init(void)
     if (!key_done) {
         spin_lock();
         if (!key_done) {
-            mode = DYNAMO_OPTION(pcache_dir)[0] == '\0' ? 0 : (int)DYNAMO_OPTION(pcache_mode);
+            mode = IS_STRING_OPTION_EMPTY(pcache_dir) ? 0 : (int)DYNAMO_OPTION(pcache_mode);
             if (mode != 0) {
                 char path[MAXIMUM_PATH];
                 compute_key();
@@ -1949,6 +1951,14 @@ out_body(out_t *o, const pc_header_t *h, uint num)
         out_put(o, ent(wents[i]), ((size_t *)wents[i])[0]);
 }
 
+#ifdef DEBUG
+static void
+free_entry(byte *copy)
+{
+    global_heap_free(copy, ((size_t *)copy)[0] + 2 * sizeof(size_t) HEAPACCT(ACCT_OTHER));
+}
+#endif
+
 static void
 write_file(void)
 {
@@ -1966,7 +1976,10 @@ write_file(void)
     for (i = 0; i < wnum; i++) {
         if (num == 0 || ent_less(wents[num - 1], wents[i]))
             wents[num++] = wents[i];
+        else
+            DODEBUG({ free_entry(wents[i]); });
     }
+    wnum = num;
     pc_header_t h;
     memset(&h, 0, sizeof(h));
     h.magic = PC_MAGIC;
@@ -2032,6 +2045,15 @@ pcache_process_exit(void)
             os_thread_yield();
         }
         write_file();
+        /* Release exits without freeing; debug checks for leaks. */
+        DODEBUG({
+            for (uint i = 0; i < wnum; i++)
+                free_entry(wents[i]);
+            if (wents != NULL)
+                global_heap_free(wents, wcap * sizeof(byte *) HEAPACCT(ACCT_OTHER));
+            wents = NULL;
+            wnum = wcap = 0;
+        });
         spin_unlock();
     }
     if (DYNAMO_OPTION(pcache_stats)) {
