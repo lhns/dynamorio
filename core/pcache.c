@@ -1952,6 +1952,12 @@ out_body(out_t *o, const pc_header_t *h, uint num)
 }
 
 static void
+free_entry(byte *copy)
+{
+    global_heap_free(copy, ((size_t *)copy)[0] + 2 * sizeof(size_t) HEAPACCT(ACCT_OTHER));
+}
+
+static void
 write_file(void)
 {
     char path[MAXIMUM_PATH], tmp[MAXIMUM_PATH];
@@ -1968,7 +1974,10 @@ write_file(void)
     for (i = 0; i < wnum; i++) {
         if (num == 0 || ent_less(wents[num - 1], wents[i]))
             wents[num++] = wents[i];
+        else
+            DODEBUG({ free_entry(wents[i]); });
     }
+    wnum = num;
     pc_header_t h;
     memset(&h, 0, sizeof(h));
     h.magic = PC_MAGIC;
@@ -2034,6 +2043,15 @@ pcache_process_exit(void)
             os_thread_yield();
         }
         write_file();
+        /* Release exits without freeing; debug checks for leaks. */
+        DODEBUG({
+            for (uint i = 0; i < wnum; i++)
+                free_entry(wents[i]);
+            if (wents != NULL)
+                global_heap_free(wents, wcap * sizeof(byte *) HEAPACCT(ACCT_OTHER));
+            wents = NULL;
+            wnum = wcap = 0;
+        });
         spin_unlock();
     }
     if (DYNAMO_OPTION(pcache_stats)) {
