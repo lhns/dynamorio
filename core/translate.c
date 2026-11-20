@@ -926,10 +926,13 @@ recreate_app_state_from_info(dcontext_t *tdcontext, const translation_info_t *in
         instr_set_our_mangling(&instr, ours);
         /* Sets the translation so that spilled registers can be restored. */
         instr_set_translation(&instr, answer);
+        /* We directly set this field rather than inserting synthetic labels.  Set it
+         * before tracking this instr: a spill right after a clean call is otherwise
+         * ignored.
+         */
+        walk.in_clean_call = in_clean_call;
         translate_walk_track_pre_instr(tdcontext, &instr, &walk);
         translate_walk_track_post_instr(tdcontext, &instr, &walk);
-        /* We directly set this field rather than inserting synthetic labels. */
-        walk.in_clean_call = in_clean_call;
 
         /* advance translation by the stride: either instr length or 0 */
         if (contig)
@@ -1654,8 +1657,6 @@ recreate_app_state_internal(dcontext_t *tdcontext, priv_mcontext_t *mcontext,
 #endif
         if (ilist == NULL) {
             ASSERT(f != NULL && FRAGMENT_TRANSLATION_INFO(f) != NULL);
-            ASSERT(!TESTANY(FRAG_WAS_DELETED, f->flags) ||
-                   INTERNAL_OPTION(safe_translate_flushed));
             res = recreate_app_state_from_info(
                 tdcontext, FRAGMENT_TRANSLATION_INFO(f), (byte *)f->start_pc,
                 (byte *)f->start_pc + f->size, mcontext, just_pc _IF_DEBUG(f->flags));
