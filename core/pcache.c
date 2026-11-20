@@ -1951,11 +1951,13 @@ out_body(out_t *o, const pc_header_t *h, uint num)
         out_put(o, ent(wents[i]), ((size_t *)wents[i])[0]);
 }
 
+#ifdef DEBUG
 static void
 free_entry(byte *copy)
 {
     global_heap_free(copy, ((size_t *)copy)[0] + 2 * sizeof(size_t) HEAPACCT(ACCT_OTHER));
 }
+#endif
 
 static void
 write_file(void)
