@@ -5228,7 +5228,13 @@ fragment_self_write(dcontext_t *dcontext)
         dcontext->last_fragment->tag,
         EXIT_CTI_PC(dcontext->last_fragment, dcontext->last_exit));
     STATS_INC(num_self_writes);
-    if (TESTANY(FRAG_WAS_DELETED, dcontext->last_fragment->flags)) {
+    /* We are nolinking, so a flusher may be unlinking our private fragments right now:
+     * become couldbelinking before deleting.  If that flush took last_fragment, the
+     * flush queue check has already handled it.
+     */
+    if (!enter_couldbelinking(dcontext, dcontext->last_fragment, false)) {
+        ASSERT(LINKSTUB_FAKE(dcontext->last_exit));
+    } else if (TESTANY(FRAG_WAS_DELETED, dcontext->last_fragment->flags)) {
         /* Case 8177: case 3559 unionized fragment_t.in_xlate, so we cannot delete a
          * fragment that has already been unlinked in the first stage of a flush.
          * The flush queue check, which comes after this (b/c we want to be
@@ -5247,6 +5253,7 @@ fragment_self_write(dcontext_t *dcontext)
         }
 #endif
     }
+    enter_nolinking(dcontext, NULL, false);
 }
 
 /* coarse_grain says to use just the min_pc and max_pc of f.
