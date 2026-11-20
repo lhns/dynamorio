@@ -405,8 +405,10 @@ compute_key(void)
 static bool
 cache_path(char *buf, size_t len)
 {
+    string_option_read_lock();
     int n = snprintf(buf, len, "%s/%s.pcache", DYNAMO_OPTION(pcache_dir),
                      get_application_short_name());
+    string_option_read_unlock();
     buf[len - 1] = '\0';
     return n >= 0 && (size_t)n < len;
 }
@@ -481,7 +483,7 @@ init(void)
     if (!key_done) {
         spin_lock();
         if (!key_done) {
-            mode = DYNAMO_OPTION(pcache_dir)[0] == '\0' ? 0 : (int)DYNAMO_OPTION(pcache_mode);
+            mode = IS_STRING_OPTION_EMPTY(pcache_dir) ? 0 : (int)DYNAMO_OPTION(pcache_mode);
             if (mode != 0) {
                 char path[MAXIMUM_PATH];
                 compute_key();
