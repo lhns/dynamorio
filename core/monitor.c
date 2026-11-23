@@ -316,6 +316,7 @@ monitor_thread_init(dcontext_t *dcontext)
                                       sizeof(monitor_data_t) HEAPACCT(ACCT_TRACE));
     dcontext->monitor_field = (void *)md;
     memset(md, 0, sizeof(monitor_data_t));
+    instrlist_init(&md->deferred_ilist);
     reset_trace_state(dcontext, false /* link lock not needed */);
 
     /* case 7966: don't initialize un-needed things for hotp_only & thin_client
@@ -348,6 +349,7 @@ monitor_thread_exit(dcontext_t *dcontext)
      * can never be built from that particular trace head.
      */
     trace_abort(dcontext);
+    monitor_free_deferred(dcontext);
 #ifdef DEBUG
     if (md->trace_buf != NULL) {
         heap_reachable_free(dcontext, md->trace_buf,
@@ -431,17 +433,57 @@ destroy_blk_vmlists(dcontext_t *dcontext, monitor_data_t *md)
     }
 }
 
+/* Moves il's instrs to the deferred list: no heap use. */
+static void
+defer_ilist(monitor_data_t *md, instrlist_t *il)
+{
+    instr_t *in;
+    while ((in = instrlist_first(il)) != NULL) {
+        instrlist_remove(il, in);
+        instrlist_append(&md->deferred_ilist, in);
+    }
+}
+
+/* Frees the IR another thread's trace_abort() left for dcontext's thread: called by that
+ * thread once couldbelinking, or for it at its exit.
+ */
+void
+monitor_free_deferred(dcontext_t *dcontext)
+{
+    monitor_data_t *md = (monitor_data_t *)dcontext->monitor_field;
+    if (instrlist_first(&md->deferred_ilist) != NULL)
+        instrlist_clear(dcontext, &md->deferred_ilist);
+    if (md->deferred_bb_ilist != NULL) {
+        instrlist_clear_and_destroy(dcontext, md->deferred_bb_ilist);
+        md->deferred_bb_ilist = NULL;
+    }
+}
+
 static void
 reset_trace_state(dcontext_t *dcontext, bool grab_link_lock)
 {
     monitor_data_t *md = (monitor_data_t *)dcontext->monitor_field;
+    bool foreign = dcontext != get_thread_private_dcontext();
     /* reset the trace buffer */
     instrlist_init(&(md->trace));
-    if (instrlist_first(&md->unmangled_ilist) != NULL)
-        instrlist_clear(dcontext, &md->unmangled_ilist);
+    if (instrlist_first(&md->unmangled_ilist) != NULL) {
+        if (foreign)
+            defer_ilist(md, &md->unmangled_ilist);
+        else
+            instrlist_clear(dcontext, &md->unmangled_ilist);
+    }
     instrlist_init(&md->unmangled_ilist);
-    if (md->unmangled_bb_ilist != NULL)
-        instrlist_clear_and_destroy(dcontext, md->unmangled_bb_ilist);
+    if (md->unmangled_bb_ilist != NULL) {
+        if (!foreign)
+            instrlist_clear_and_destroy(dcontext, md->unmangled_bb_ilist);
+        else if (md->deferred_bb_ilist == NULL)
+            md->deferred_bb_ilist = md->unmangled_bb_ilist;
+        else {
+            /* Not expected: the owner frees its deferred IR before building again. */
+            ASSERT_NOT_REACHED();
+            defer_ilist(md, md->unmangled_bb_ilist);
+        }
+    }
     md->unmangled_bb_ilist = NULL;
     md->trace_buf_top = 0;
     ASSERT(md->trace_vmlist == NULL);
@@ -2311,6 +2353,7 @@ trace_abort(dcontext_t *dcontext)
     monitor_data_t *md = (monitor_data_t *)dcontext->monitor_field;
     instrlist_t *trace;
     bool prevlinking = true;
+    bool foreign = dcontext != get_thread_private_dcontext();
 
     if (md->trace_tag == NULL && md->last_copy == NULL)
         return; /* NOT in trace selection mode */
@@ -2328,6 +2371,8 @@ trace_abort(dcontext_t *dcontext)
             enter_couldbelinking(dcontext, NULL, false /*not a cache transition*/);
         }
     }
+    if (!foreign)
+        monitor_free_deferred(dcontext);
 
     /* must relink unlinked trace-extending fragment
      * cannot use last_exit, must use our own last_fragment just for this
@@ -2344,9 +2389,14 @@ trace_abort(dcontext_t *dcontext)
      * thread exit instead.
      */
 
-    /* free the instrlist_t elements */
+    /* free the instrlist_t elements: another thread (a flusher) leaves them to the owner,
+     * since the owner may be using its local heap in its signal handler (nolinking)
+     */
     trace = &md->trace;
-    instrlist_clear(dcontext, trace);
+    if (foreign)
+        defer_ilist(md, trace);
+    else
+        instrlist_clear(dcontext, trace);
 
     if (md->trace_vmlist != NULL) {
         vm_area_destroy_list(dcontext, md->trace_vmlist);
