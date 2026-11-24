@@ -5591,7 +5591,11 @@ compute_memory_target(dcontext_t *dcontext, cache_pc instr_cache_pc,
 {
     sigcontext_t *sc = SIGCXT_FROM_UCXT(uc);
     byte *target = NULL;
-    instr_t instr;
+    /* On the stack, not the thread's heap: a flusher may be freeing to that heap while
+     * this thread is nolinking in its handler.
+     */
+    instr_noalloc_t noalloc;
+    instr_t *instr = instr_from_noalloc(&noalloc);
     priv_mcontext_t mc;
     uint memopidx, memoppos, memopsize;
     opnd_t memop;
@@ -5613,24 +5617,24 @@ compute_memory_target(dcontext_t *dcontext, cache_pc instr_cache_pc,
      * query is expensive.  If decoding faults, the signal handler will longjmp
      * out before it calls us recursively.
      */
-    instr_init(dcontext, &instr);
+    instr_noalloc_init(dcontext, &noalloc);
     IF_ARM({
         /* Be sure to use the interrupted mode and not the last-dispatch mode */
         dr_set_isa_mode(dcontext, get_pc_mode_from_cpsr(sc), &old_mode);
     });
     TRY_EXCEPT(
-        dcontext, { decode(dcontext, instr_cache_pc, &instr); },
+        dcontext, { decode(dcontext, instr_cache_pc, instr); },
         {
             return NULL; /* instr_cache_pc was unreadable */
         });
     IF_ARM(dr_set_isa_mode(dcontext, old_mode, NULL));
 
-    if (!instr_valid(&instr)) {
+    if (!instr_valid(instr)) {
         LOG(THREAD, LOG_ALL, 2,
             "WARNING: got SIGSEGV for invalid instr at cache pc " PFX "\n",
             instr_cache_pc);
         ASSERT_NOT_REACHED();
-        instr_free(dcontext, &instr);
+        instr_free(dcontext, instr);
         return NULL;
     }
 
@@ -5645,12 +5649,12 @@ compute_memory_target(dcontext_t *dcontext, cache_pc instr_cache_pc,
      * is typically unmapped.
      */
     if (si->si_code == SEGV_ACCERR && si->si_addr != NULL) {
-        for (memopidx = 0; instr_compute_address_ex_priv(&instr, &mc, memopidx, &target,
+        for (memopidx = 0; instr_compute_address_ex_priv(instr, &mc, memopidx, &target,
                                                          write, &memoppos);
              memopidx++) {
             /* i#1045: check whether operand and si_addr overlap */
-            memop = *write ? instr_get_dst(&instr, memoppos)
-                           : instr_get_src(&instr, memoppos);
+            memop = *write ? instr_get_dst(instr, memoppos)
+                           : instr_get_src(instr, memoppos);
             memopsize = opnd_size_in_bytes(opnd_get_size(memop));
             LOG(THREAD, LOG_ALL, 2, "memory operand %u has address " PFX " and size %u\n",
                 memopidx, target, memopsize);
@@ -5676,7 +5680,7 @@ compute_memory_target(dcontext_t *dcontext, cache_pc instr_cache_pc,
         }
         /* i#115/PR 394984: consider all memops */
         for (memopidx = 0;
-             instr_compute_address_ex_priv(&instr, &mc, memopidx, &target, write, NULL);
+             instr_compute_address_ex_priv(instr, &mc, memopidx, &target, write, NULL);
              memopidx++) {
             if (use_allmem) {
                 in_maps = get_memory_info(target, NULL, NULL, &prot);
@@ -5707,9 +5711,9 @@ compute_memory_target(dcontext_t *dcontext, cache_pc instr_cache_pc,
         LOG(THREAD, LOG_ALL, 2,
             "For SIGSEGV at cache pc " PFX ", computed target %s " PFX "\n",
             instr_cache_pc, *write ? "write" : "read", target);
-        d_r_loginst(dcontext, 2, &instr, "\tfaulting instr");
+        d_r_loginst(dcontext, 2, instr, "\tfaulting instr");
     });
-    instr_free(dcontext, &instr);
+    instr_free(dcontext, instr);
     return target;
 }
 

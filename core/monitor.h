@@ -111,6 +111,9 @@ cur_trace_vmlist(dcontext_t *dcontext);
 void
 trace_abort(dcontext_t *dcontext);
 
+void
+monitor_free_deferred(dcontext_t *dcontext);
+
 /* Equivalent to trace_abort, except that lazily deleted fragments are cleaned
  * up eagerly.  Can only be called at safe points when we know the app is not
  * executing in the fragment, such as thread termination or reset events.
@@ -191,6 +194,13 @@ typedef struct _monitor_data_t {
     uint final_exit_flags;
 
     fragment_t wrapper; /* for creating new shadowed trace heads */
+
+    /* IR of a trace another thread aborted (a flusher), which only this thread may free:
+     * the flusher must not use this thread's local heap, which it may be using in its
+     * signal handler while nolinking.
+     */
+    instrlist_t deferred_ilist;
+    instrlist_t *deferred_bb_ilist;
 } monitor_data_t;
 
 /* PR 204770: use trace component bb tag for RCT source address */

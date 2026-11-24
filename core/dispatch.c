@@ -1038,6 +1038,8 @@ dispatch_enter_dynamorio(dcontext_t *dcontext)
          */
         ASSERT(LINKSTUB_FAKE(dcontext->last_exit));
     }
+    /* Couldbelinking, so no flusher is aborting our trace: free what one left us. */
+    monitor_free_deferred(dcontext);
 
     if (wherewasi != DR_WHERE_APP) { /* if not first entrance */
         /* now fully process the last cache exit as couldbelinking */
