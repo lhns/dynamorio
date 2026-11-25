@@ -3054,6 +3054,12 @@ copy_and_re_relativize_raw_instr(dcontext_t *dcontext, instr_t *instr, byte *dst
                                  byte *final_pc)
 {
     byte *orig_dst_pc = dst_pc;
+    /* The raw bits name the app pc; a sandboxed block's bytes come from its snapshot. */
+#ifdef STANDALONE_DECODER
+    byte *src = instr->bytes;
+#else
+    byte *src = interp_selfmod_raw_source(dcontext, instr->bytes, instr->length);
+#endif
     ASSERT(instr_raw_bits_valid(instr));
     /* For PR 251646 we have special support for mangled jecxz/loop* */
     if (instr_is_cti_short_rewrite(instr, NULL)) {
@@ -3061,7 +3067,7 @@ copy_and_re_relativize_raw_instr(dcontext_t *dcontext, instr_t *instr, byte *dst
         CLIENT_ASSERT(opnd_is_pc(instr_get_target(instr)),
                       "cti_short_rewrite: must have pc target");
         target = opnd_get_pc(instr_get_target(instr));
-        memcpy(dst_pc, instr->bytes, instr->length - 4);
+        memcpy(dst_pc, src, instr->length - 4);
         dst_pc += instr->length - 4;
         if (!REL32_REACHABLE(final_pc + instr->length, target)) {
             CLIENT_ASSERT(false, "mangled jecxz/loop*: target out of 32-bit reach");
@@ -3087,10 +3093,10 @@ copy_and_re_relativize_raw_instr(dcontext_t *dcontext, instr_t *instr, byte *dst
             int num_prefixes;
             int i;
             IF_X64(bool old_mode = set_x86_mode(dcontext, instr_get_x86_mode(instr));)
-            decode_sizeof(dcontext, instr->bytes, &num_prefixes _IF_X64(NULL));
+            decode_sizeof(dcontext, src, &num_prefixes _IF_X64(NULL));
             IF_X64(set_x86_mode(dcontext, old_mode));
             for (i = 0; i < num_prefixes; i++) {
-                if (*(instr->bytes + i) == ADDR_PREFIX_OPCODE) {
+                if (*(src + i) == ADDR_PREFIX_OPCODE) {
                     addr32 = true;
                     break;
                 }
@@ -3107,7 +3113,7 @@ copy_and_re_relativize_raw_instr(dcontext_t *dcontext, instr_t *instr, byte *dst
                           "address whose target is unreachable");
             return NULL;
         }
-        memcpy(dst_pc, instr->bytes, rip_rel_pos);
+        memcpy(dst_pc, src, rip_rel_pos);
         dst_pc += rip_rel_pos;
         /* We only support non-4-byte rip-rel disps for 1-byte instr-final (jcc_short). */
         if (rip_rel_pos + 1 == instr->length) {
@@ -3119,12 +3125,12 @@ copy_and_re_relativize_raw_instr(dcontext_t *dcontext, instr_t *instr, byte *dst
             *((int *)dst_pc) = (int)new_offs;
             if (rip_rel_pos + 4U < instr->length) {
                 /* suffix byte */
-                memcpy(dst_pc + 4, instr->bytes + rip_rel_pos + 4,
+                memcpy(dst_pc + 4, src + rip_rel_pos + 4,
                        instr->length - (rip_rel_pos + 4));
             }
         }
     } else
-        memcpy(dst_pc, instr->bytes, instr->length);
+        memcpy(dst_pc, src, instr->length);
     return orig_dst_pc + instr->length;
 }
 

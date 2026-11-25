@@ -1533,6 +1533,10 @@ expand_should_set_translation(dcontext_t *dcontext);
  *   follow ubrs to the limit.  Currently used for
  *   record_translation_info() (case 3559).
  */
+bool
+interp_selfmod_snapshot(dcontext_t *dcontext, app_pc tag, byte **bytes, app_pc *end);
+byte *
+interp_selfmod_raw_source(dcontext_t *dcontext, byte *bytes, uint len);
 instrlist_t *
 recreate_bb_ilist(dcontext_t *dcontext, byte *pc, byte *pretend_pc,
                   app_pc stop_pc /*optional, only for full_decode*/, uint flags,
