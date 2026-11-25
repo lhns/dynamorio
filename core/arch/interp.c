@@ -229,6 +229,13 @@ typedef struct {
     instr_t *instr;                    /* the current instr */
     int eflags;
     app_pc pretend_pc; /* selfmod only: decode from separate pc */
+    /* A sandboxed block for the cache is decoded, emitted and compared against this one
+     * read of its app bytes, so a write racing the build cannot make them differ.
+     */
+    byte *snap;
+    size_t snap_len, snap_cap;
+    app_pc snap_end;  /* end of the sandboxed range, set by mangling */
+    bool snap_broken; /* an instruction was decoded from app memory instead */
 #ifdef ARM
     dr_pred_type_t svc_pred; /* predicate for conditional svc */
 #endif
@@ -238,6 +245,80 @@ typedef struct {
 /* forward decl */
 static inline bool
 bb_process_syscall(dcontext_t *dcontext, build_bb_t *bb);
+
+static void
+bb_free_snapshot(dcontext_t *dcontext, build_bb_t *bb)
+{
+    if (bb->snap != NULL) {
+        heap_free(dcontext, bb->snap, bb->snap_cap HEAPACCT(ACCT_OTHER));
+        bb->snap = NULL;
+    }
+}
+
+#ifdef X86
+/* Points *copy at the snapshot of the app bytes at pc, reading them into it first if
+ * needed.  Returns false where they cannot be read (pc is then decoded from app memory).
+ */
+static bool
+bb_snapshot_bytes(dcontext_t *dcontext, build_bb_t *bb, app_pc pc, byte **copy)
+{
+    size_t off, want, got = 0;
+    if (pc < bb->start_pc)
+        return false;
+    off = pc - bb->start_pc;
+    want = off + MAX_INSTR_LENGTH;
+    if (bb->snap == NULL) {
+        bb->snap_cap = (DYNAMO_OPTION(max_bb_instrs) + 2) * MAX_INSTR_LENGTH;
+        bb->snap = (byte *)heap_alloc(dcontext, bb->snap_cap HEAPACCT(ACCT_OTHER));
+        bb->snap_len = 0;
+    }
+    if (want > bb->snap_cap)
+        return false;
+    if (bb->snap_len < want) {
+        safe_read_ex(bb->start_pc + bb->snap_len, want - bb->snap_len,
+                     bb->snap + bb->snap_len, &got);
+        bb->snap_len += got;
+    }
+    if (bb->snap_len < want)
+        return false;
+    *copy = bb->snap + off;
+    return true;
+}
+#endif
+
+/* For the encoder: where to copy the raw bytes [bytes, bytes + len) of an app
+ * instruction from.  Inside the snapshot of the sandboxed block being built, that is
+ * the snapshot, so the emitted bytes are the ones decoded.
+ */
+byte *
+interp_selfmod_raw_source(dcontext_t *dcontext, byte *bytes, uint len)
+{
+    build_bb_t *bb;
+    if (dcontext == NULL || dcontext == GLOBAL_DCONTEXT)
+        return bytes;
+    bb = (build_bb_t *)dcontext->bb_build_info;
+    if (bb == NULL || !bb->for_cache || bb->snap == NULL || bb->snap_broken ||
+        bytes < bb->start_pc || bytes + len > bb->start_pc + bb->snap_len)
+        return bytes;
+    return bb->snap + (bytes - bb->start_pc);
+}
+
+/* For emit: the snapshot a sandboxed block being built from tag was decoded from. */
+bool
+interp_selfmod_snapshot(dcontext_t *dcontext, app_pc tag, byte **bytes, app_pc *end)
+{
+    build_bb_t *bb;
+    if (dcontext == NULL || dcontext == GLOBAL_DCONTEXT)
+        return false;
+    bb = (build_bb_t *)dcontext->bb_build_info;
+    if (bb == NULL || !bb->for_cache || bb->snap == NULL || bb->snap_broken ||
+        bb->snap_end == NULL || bb->start_pc != tag || bb->snap_end <= tag ||
+        (size_t)(bb->snap_end - tag) > bb->snap_len)
+        return false;
+    *bytes = bb->snap;
+    *end = bb->snap_end;
+    return true;
+}
 
 static void
 init_build_bb(build_bb_t *bb, app_pc start_pc, bool app_interp, bool for_cache,
@@ -3345,6 +3426,9 @@ build_bb_ilist(dcontext_t *dcontext, build_bb_t *bb)
 #endif
 
     bb->cur_pc = bb->start_pc;
+    bb->snap_len = 0;
+    bb->snap_end = NULL;
+    bb->snap_broken = false;
 
     /* for translation in case we break out of loop before decoding any
      * instructions, (i.e. check_for_stopping_point()) */
@@ -3401,6 +3485,7 @@ build_bb_ilist(dcontext_t *dcontext, build_bb_t *bb)
             if (bb->full_decode) {
                 /* only going through this do loop once! */
 #ifdef X86
+                byte *snap_pc;
                 if (bb->pretend_pc != NULL) {
                     /* Recreating a selfmod fragment from its copy: rip-relative operands
                      * must resolve against the app pc, or their mangling (and so the
@@ -3411,10 +3496,34 @@ build_bb_ilist(dcontext_t *dcontext, build_bb_t *bb)
                         bb->instr);
                     /* Else the target is read from the raw bits, at the copy. */
                     instr_set_rip_rel_valid(bb->instr, false);
+                } else if (TESTANY(FRAG_SELFMOD_SANDBOXED, bb->flags) && bb->for_cache &&
+                           !bb->snap_broken &&
+                           bb_snapshot_bytes(dcontext, bb, bb->cur_pc, &snap_pc)) {
+                    /* Decoded from the snapshot; the raw bits still name the app pc, as
+                     * code here and the encoder expect, and the encoder copies their
+                     * bytes from the snapshot (interp_selfmod_raw_source()).
+                     */
+                    byte *next = decode_from_copy(dcontext, snap_pc, bb->cur_pc, bb->instr);
+                    if (next == NULL) {
+                        /* Invalid: decode it as before, with its raw bits at the app pc. */
+                        instr_reset(dcontext, bb->instr);
+                        bb->snap_broken = true;
+                        bb->cur_pc = decode(dcontext, bb->cur_pc, bb->instr);
+                    } else {
+                        /* As a decode at the app pc would leave it, rip-relative info too. */
+                        bool rip_rel = instr_rip_rel_valid(bb->instr);
+                        instr_set_raw_bits(bb->instr, bb->cur_pc, (uint)(next - snap_pc));
+                        instr_set_rip_rel_valid(bb->instr, rip_rel);
+                        bb->cur_pc += next - snap_pc;
+                    }
                 } else
 #endif
+                {
+                    if (TESTANY(FRAG_SELFMOD_SANDBOXED, bb->flags))
+                        bb->snap_broken = true;
                     bb->cur_pc = IF_AARCH64_ELSE(decode_with_ldstex,
                                                  decode)(dcontext, bb->cur_pc, bb->instr);
+                }
                 if (bb->record_translation)
                     instr_set_translation(bb->instr, bb->instr_start);
             } else {
@@ -4452,6 +4561,7 @@ bb_build_abort(dcontext_t *dcontext, bool clean_vmarea, bool unlock)
     ASSERT(dcontext->bb_build_info != NULL); /* caller should check */
     if (dcontext->bb_build_info != NULL) {
         build_bb_t *bb = (build_bb_t *)dcontext->bb_build_info;
+        bb_free_snapshot(dcontext, bb);
         /* free instr memory */
         if (bb->instr != NULL && bb->ilist != NULL &&
             instrlist_last(bb->ilist) != bb->instr)
@@ -4525,6 +4635,8 @@ mangle_bb_ilist(dcontext_t *dcontext, build_bb_t *bb)
             selfmod_start = bb->start_pc;
             selfmod_end = bb->cur_pc;
         }
+        if (bb->pretend_pc == NULL)
+            bb->snap_end = selfmod_end;
         if (!insert_selfmod_sandbox(dcontext, bb->ilist, bb->flags, selfmod_start,
                                     selfmod_end, bb->record_translation, bb->for_cache)) {
             /* have to rebuild bb using full decode -- it has invalid instrs
@@ -5126,6 +5238,7 @@ exit_interp_build_bb(dcontext_t *dcontext, build_bb_t *bb)
     ASSERT(dcontext->bb_build_info == (void *)bb);
     /* Caller's responsibility to clean up since bb.for_cache */
     dcontext->bb_build_info = NULL;
+    bb_free_snapshot(dcontext, bb);
 
     /* free the instrlist_t elements */
     instrlist_clear_and_destroy(dcontext, bb->ilist);
@@ -5197,6 +5310,7 @@ build_basic_block_fragment(dcontext_t *dcontext, app_pc start, uint initial_flag
             bb.vmlist = pc_vmlist;
         }
         if (dcontext->bb_build_info == NULL) { /* going native */
+            bb_free_snapshot(dcontext, &bb);
             f = NULL;
             goto build_basic_block_fragment_done;
         }
@@ -5207,6 +5321,7 @@ build_basic_block_fragment(dcontext_t *dcontext, app_pc start, uint initial_flag
             instrlist_clear_and_destroy(dcontext, bb.ilist);
             vm_area_destroy_list(dcontext, bb.vmlist);
             dcontext->bb_build_info = NULL;
+            bb_free_snapshot(dcontext, &bb);
             init_interp_build_bb(dcontext, &bb, start, initial_flags, for_trace,
                                  unmangled_ilist);
             /* PR 232617 - build_native_exec_bb doesn't support setting

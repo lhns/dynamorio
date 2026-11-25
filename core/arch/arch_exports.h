@@ -1525,6 +1525,12 @@ bb_build_abort(dcontext_t *dcontext, bool clean_vmarea, bool unlock);
 bool
 expand_should_set_translation(dcontext_t *dcontext);
 
+/* A sandboxed block being built for the cache: its snapshot, for emit and encode. */
+bool
+interp_selfmod_snapshot(dcontext_t *dcontext, app_pc tag, byte **bytes, app_pc *end);
+byte *
+interp_selfmod_raw_source(dcontext_t *dcontext, byte *bytes, uint len);
+
 /* Builds an instrlist_t as though building a bb from pc.
  * Use recreate_fragment_ilist() for building an instrlist_t for a fragment.
  * If check_vm_area is false, Does NOT call check_thread_vm_area()!
