@@ -1300,6 +1300,8 @@ synch_with_threads_at_exit(thread_synch_state_t synch_res, bool pre_exit)
      * loop to a stack-free loop (xref i#95).
      */
     IF_UNIX(dynamo_exiting = true;) /* include execve-exited vfork threads */
+    print_file(STDERR, "@@TEX exit synch begin tid=%d pre=%d threads=%d\n",
+               get_sys_thread_id(), pre_exit, d_r_get_num_threads());
     DEBUG_DECLARE(ok =)
     synch_with_all_threads(synch_res, &threads, &num_threads,
                            /* Case 6821: other synch-all-thread uses that
@@ -1315,6 +1317,7 @@ synch_with_threads_at_exit(thread_synch_state_t synch_res, bool pre_exit)
      * while we hold the thread_initexit_lock so any new threads that
      * are waiting on it won't get in our way (see thread_init()) */
     dynamo_exited = true;
+    print_file(STDERR, "@@TEX exit synch end tid=%d\n", get_sys_thread_id());
     end_synch_with_all_threads(threads, num_threads, false /*don't resume*/);
 }
 

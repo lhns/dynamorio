@@ -586,6 +586,13 @@ privload_tls_init(void *app_tp, bool use_safe_read)
                 LOG(GLOBAL, LOG_LOADER, 2, "%s: TLS is not readable\n", __FUNCTION__);
             }
         } else {
+            extern volatile int tex_dfl_tid;
+            if (tex_dfl_tid != 0) {
+                print_file(STDERR,
+                           "@@TEX init safe read tid=%d after SIGSEGV reset by tid=%d "
+                           "read=%p+%zu\n",
+                           get_sys_thread_id(), tex_dfl_tid, app_start, size_to_copy);
+            }
             if (!safe_read_ex(app_start, size_to_copy, dr_start, &tls_bytes_read)) {
                 LOG(GLOBAL, LOG_LOADER, 2, "%s: read failed after %zd bytes\n",
                     __FUNCTION__, tls_bytes_read);

@@ -376,9 +376,20 @@ dump_unmasked(dcontext_t *dcontext, const char *where)
 static bool
 is_sys_kill(dcontext_t *dcontext, byte *pc, byte *xsp, kernel_siginfo_t *info);
 
+/* lab-te-exit-diag: the tid that last replaced DR's SIGSEGV handler, 0 if none. */
+volatile int tex_dfl_tid;
+
 int
 sigaction_syscall(int sig, kernel_sigaction_t *act, kernel_sigaction_t *oact)
 {
+    if (sig == SIGSEGV && act != NULL && act->handler != (handler_t)main_signal_handler) {
+        tex_dfl_tid = get_sys_thread_id();
+        print_file(STDERR,
+                   "@@TEX sigaction SIGSEGV handler=%p tid=%d caller=%p dr=%p exited=%d "
+                   "threads=%d\n",
+                   act->handler, get_sys_thread_id(), __builtin_return_address(0),
+                   get_dynamorio_dll_start(), dynamo_exited, d_r_get_num_threads());
+    }
 #if !defined(VMX86_SERVER) && defined(LINUX)
     /* PR 305020: must have SA_RESTORER for x64 */
     /* i#2812: must have SA_RESTORER to handle vsyscall32 being disabled */
@@ -7267,6 +7278,11 @@ execute_default_action(dcontext_t *dcontext, int sig, sigframe_rt_t *frame,
     byte *pc = (byte *)sc->SC_XIP;
 
     LOG(THREAD, LOG_ASYNCH, 3, "execute_default_action for signal %d\n", sig);
+    print_file(STDERR,
+               "@@TEX default_action sig=%d tid=%d pc=%p addr=%p code=%d dispatch=%d "
+               "forged=%d exited=%d threads=%d\n",
+               sig, get_sys_thread_id(), pc, frame->info.si_addr, frame->info.si_code,
+               from_dispatch, forged, dynamo_exited, d_r_get_num_threads());
 
     /* should only come here for signals we catch, or signal with ONESHOT
      * that didn't sigreturn
@@ -7408,7 +7424,11 @@ execute_default_action(dcontext_t *dcontext, int sig, sigframe_rt_t *frame,
                      * the signal in the app context
                      */
                     LOG(THREAD, LOG_ASYNCH, 1, "Raising signal by re-executing\n");
+                    print_file(STDERR, "@@TEX reexec exit begin tid=%d\n",
+                               get_sys_thread_id());
                     dynamo_process_exit();
+                    print_file(STDERR, "@@TEX reexec exit end tid=%d\n",
+                               get_sys_thread_id());
                     /* we cannot re-enter the cache, which is freed by now */
                     ASSERT(!from_dispatch);
                     return false;
