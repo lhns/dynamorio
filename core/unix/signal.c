@@ -7135,8 +7135,34 @@ execute_native_handler(dcontext_t *dcontext, int sig, sigframe_rt_t *our_frame,
     }
 }
 
+/* The signal a process exit ends with, given its default action by signal_fast_exit(). */
+static volatile int exit_kill_signal;
+/* Set if os_terminate_via_signal() gave the signal the app's handler instead. */
+static bool exit_keep_action;
+
+static void
+set_exit_signal_action(int sig)
+{
+    if (!exit_keep_action)
+        set_default_signal_action(sig);
+}
+
+/* Gives the signal terminate_via_kill() sends its default action, now that the process
+ * exit has ended every other thread.  Until then DR's handler has to stay: other
+ * threads still fault in DR on purpose, as a new thread's safe read of its TLS does,
+ * and the default action would kill the process with that fault instead.
+ */
+void
+signal_fast_exit(void)
+{
+    if (exit_kill_signal != 0)
+        set_exit_signal_action(exit_kill_signal);
+}
+
 /* The arg to SYS_kill, i.e., the signal number, should be in dcontext->sys_param0 */
-/* This routine unblocks signals, but the caller must set the handler to default. */
+/* This routine unblocks signals and gives the signal its default action once the
+ * other threads are gone.
+ */
 static void
 terminate_via_kill(dcontext_t *dcontext)
 {
@@ -7163,8 +7189,15 @@ terminate_via_kill(dcontext_t *dcontext)
      * kernel holds until a vfork child is gone.
      */
     bool exit_process = is_last_thread_group();
-    if (!exit_process)
+    if (!exit_process) {
         exit_other_threads_in_group(false /*no valid mcontext*/);
+        set_exit_signal_action((int)dcontext->sys_param0);
+    } else {
+        exit_kill_signal = (int)dcontext->sys_param0;
+        /* A process exit already done will not reach signal_fast_exit() again. */
+        if (dynamo_exited)
+            set_exit_signal_action(exit_kill_signal);
+    }
     block_cleanup_and_terminate(
         dcontext, SYS_kill,
         /* Pass -pid in case main thread has exited
@@ -7222,7 +7255,10 @@ os_terminate_via_signal(dcontext_t *dcontext, terminate_flags_t flags, int sig)
             }
         }
 #endif
-        if (!set_action) {
+        if (set_action)
+            exit_keep_action = true;
+        else if (!TESTANY(TERMINATE_CLEANUP, flags)) {
+            /* With cleanup, terminate_via_kill() installs it after the exit. */
             DEBUG_DECLARE(bool res =)
             set_default_signal_action(sig);
             ASSERT(res);
@@ -7299,9 +7335,15 @@ execute_default_action(dcontext_t *dcontext, int sig, sigframe_rt_t *frame,
      * the signal ourselves.
      */
     if (default_action[sig] != DEFAULT_IGNORE) {
-        DEBUG_DECLARE(bool ok =)
-        set_default_signal_action(sig);
-        ASSERT(ok);
+        /* A signal that ends the process gets its default action only once every
+         * other thread is gone (see signal_fast_exit()).
+         */
+        if (default_action[sig] != DEFAULT_TERMINATE &&
+            default_action[sig] != DEFAULT_TERMINATE_CORE) {
+            DEBUG_DECLARE(bool ok =)
+            set_default_signal_action(sig);
+            ASSERT(ok);
+        }
 
         /* XXX: to avoid races w/ shared handlers should set a flag to
          * prevent another thread from re-enabling.
@@ -7409,6 +7451,18 @@ execute_default_action(dcontext_t *dcontext, int sig, sigframe_rt_t *frame,
                      */
                     LOG(THREAD, LOG_ASYNCH, 1, "Raising signal by re-executing\n");
                     dynamo_process_exit();
+                    /* Re-raise it with its siginfo rather than count on the instruction
+                     * faulting again: what it faulted on can be mapped by now.  It is
+                     * blocked here, so it stays pending until our sigreturn, and is
+                     * then delivered at the app pc, as natively.
+                     */
+                    kernel_sigaction_t dfl;
+                    memset(&dfl, 0, sizeof(dfl));
+                    dfl.handler = (handler_t)SIG_DFL;
+                    sigaction_syscall(sig, &dfl, NULL);
+                    kernel_sigdelset((kernel_sigset_t *)&frame->uc.uc_sigmask, sig);
+                    dynamorio_syscall(SYS_rt_tgsigqueueinfo, 4, get_process_id(),
+                                      get_sys_thread_id(), sig, &frame->info);
                     /* we cannot re-enter the cache, which is freed by now */
                     ASSERT(!from_dispatch);
                     return false;

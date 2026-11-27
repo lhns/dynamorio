@@ -335,6 +335,8 @@ d_r_signal_init(void);
 void
 d_r_signal_exit(void);
 void
+signal_fast_exit(void);
+void
 signal_thread_init(dcontext_t *dcontext, void *os_data);
 void
 signal_thread_exit(dcontext_t *dcontext, bool other_thread);

@@ -1548,7 +1548,7 @@ block_cleanup_and_terminate(dcontext_t *dcontext, int sysnum, ptr_uint_t sys_arg
 void
 os_fast_exit(void)
 {
-    /* nothing */
+    signal_fast_exit();
 }
 
 void
