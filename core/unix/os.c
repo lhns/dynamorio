@@ -209,6 +209,7 @@ char **our_environ;
 #include "os_private.h"
 #include "ptrace_private.h"
 #include "../synch.h"
+#include "../fragment.h" /* is_couldbelinking */
 #include "memquery.h"
 #include "ksynch.h"
 #include "dr_tools.h" /* dr_syscall_result_info_t */
@@ -1522,6 +1523,55 @@ os_slow_exit(void)
     IF_NO_MEMQUERY(memcache_exit());
 }
 
+/* The thread ending the process and how: an exit status, or a signal if
+ * process_end_signal is not 0.  process_end_tid is 0 until a thread claims it.
+ */
+static volatile int process_end_tid;
+static int process_end_status;
+static int process_end_signal;
+
+/* Natively the first exit_group or fatal signal ends every other thread at once, but
+ * our exit takes a while and other threads run on until its synch reaches them.  Only
+ * the first thread to end the process may; any other waits here, at a safe spot, for
+ * the first one's synch to end it.  Called before any lock.  Only for our own thread
+ * group: a vfork child sharing our memory (its pid is not pid_cached) is left as it was.
+ */
+void
+os_end_process_first(dcontext_t *dcontext, int sig, int status)
+{
+    int me = (int)get_sys_thread_id();
+    if (get_process_id() != pid_cached || process_end_tid == me)
+        return;
+    if (atomic_compare_exchange_int(&process_end_tid, 0, me)) {
+        process_end_signal = sig;
+        process_end_status = status;
+        return;
+    }
+    LOG(THREAD, LOG_SYSCALLS, 1, "thread %d ends the process: waiting for it\n",
+        process_end_tid);
+    if (is_couldbelinking(dcontext))
+        enter_nolinking(dcontext, NULL, false);
+    while (true) {
+        check_wait_at_safe_spot(dcontext, THREAD_SYNCH_NO_LOCKS_NO_XFER);
+        os_thread_yield();
+    }
+}
+
+/* Called by a thread about to end itself after the exit: if it is the one ending the
+ * process, the others wait for it, so it ends the process the way it claimed.
+ */
+void
+os_end_process_if_claimed(void)
+{
+    if (process_end_tid != (int)get_sys_thread_id())
+        return;
+    if (process_end_signal != 0) {
+        set_default_signal_action(process_end_signal);
+        dynamorio_syscall(SYS_kill, 2, get_process_id(), process_end_signal);
+    }
+    exit_process_syscall(process_end_status);
+}
+
 /* Helper function that calls cleanup_and_terminate after blocking most signals
  *(i#2921).
  */
@@ -1536,6 +1586,10 @@ block_cleanup_and_terminate(dcontext_t *dcontext, int sysnum, ptr_uint_t sys_arg
      * We may still receive a suspend signal for synchronization that we may need
      * to reply to (i#2921).
      */
+    if (exitproc) {
+        os_end_process_first(dcontext, sysnum == SYS_kill ? (int)sys_arg2 : 0,
+                             sysnum == SYS_kill ? 0 : (int)sys_arg1);
+    }
     if (sysnum == SYS_kill)
         block_all_noncrash_signals_except(NULL, 2, dcontext->sys_param0, SUSPEND_SIGNAL);
     else
@@ -2869,6 +2923,8 @@ os_fork_init(dcontext_t *dcontext)
 
     /* re-populate cached data that contains pid */
     pid_cached = get_process_id();
+    /* A claim to end the parent (os_end_process_first()) is not ours. */
+    process_end_tid = 0;
     get_application_pid_helper(true);
     get_application_name_helper(true, true /* not important */);
 
@@ -7370,6 +7426,8 @@ handle_exit(dcontext_t *dcontext)
     bool exit_process = false;
 
     if (dcontext->sys_num == SYSNUM_EXIT_PROCESS) {
+        /* Before any lock: the first to end the process decides how it ends. */
+        os_end_process_first(dcontext, 0, (int)sys_param(dcontext, 0));
         /* XXX: we can have races where new threads are created after our
          * check: we'll live with that for now, but the right approach is to
          * suspend all threads via synch_with_all_threads(), do the check,

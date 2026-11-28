@@ -5986,6 +5986,7 @@ main_signal_handler_C(byte *xsp)
          * We live w/ the risk that it was holding a lock our release-build
          * exit code needs.
          */
+        os_end_process_if_claimed();
         exit_thread_syscall(1);
     }
     /* XXX: ensure the path for recording a pending signal does not grab any DR locks
@@ -7188,6 +7189,7 @@ terminate_via_kill(dcontext_t *dcontext)
      * ends only ours.  A process exit would also wait for a vfork parent, which the
      * kernel holds until a vfork child is gone.
      */
+    os_end_process_first(dcontext, (int)dcontext->sys_param0, 0);
     bool exit_process = is_last_thread_group();
     if (!exit_process) {
         exit_other_threads_in_group(false /*no valid mcontext*/);
@@ -7358,6 +7360,8 @@ execute_default_action(dcontext_t *dcontext, int sig, sigframe_rt_t *frame,
         }
         if (default_action[sig] == DEFAULT_TERMINATE ||
             default_action[sig] == DEFAULT_TERMINATE_CORE) {
+            /* Before any lock: the first to end the process decides how it ends. */
+            os_end_process_first(dcontext, sig, 0);
             report_app_problem(dcontext, APPFAULT_CRASH, pc, (byte *)sc->SC_FP,
                                "\nSignal %d delivered to application as default "
                                "action.\n",
